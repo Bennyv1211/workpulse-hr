@@ -443,11 +443,14 @@ async def register(user_data: UserCreate):
         if existing_user:
             raise HTTPException(status_code=400, detail="Email already registered")
 
-        # Reuse existing employee profile if one already exists for this email,
-        # otherwise create a new one automatically.
         employee = await db.employees.find_one({"email": email})
-
         user_id = str(uuid.uuid4())
+
+        employee_id_value = None
+        if employee:
+            if employee.get("user_id"):
+                raise HTTPException(status_code=400, detail="Employee already has an account.")
+            employee_id_value = employee.get("employee_id")
 
         user = {
             "id": user_id,
@@ -456,7 +459,7 @@ async def register(user_data: UserCreate):
             "first_name": user_data.first_name,
             "last_name": user_data.last_name,
             "role": user_data.role,
-            "employee_id": employee.get("employee_id") if employee else None,
+            "employee_id": employee_id_value,
             "onboarding_completed": False,
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow()
@@ -465,22 +468,12 @@ async def register(user_data: UserCreate):
         await db.users.insert_one(user)
 
         if employee:
-            if employee.get("user_id"):
-                raise HTTPException(status_code=400, detail="Employee already has an account.")
-
             await db.employees.update_one(
                 {"id": employee["id"]},
-                {"$set": {
-                    "user_id": user_id,
-                    "updated_at": datetime.utcnow()
-                }}
+                {"$set": {"user_id": user_id, "updated_at": datetime.utcnow()}}
             )
-
-            employee_id_value = employee.get("employee_id")
         else:
-            # Find or create a default "Unassigned" department
             default_department = await db.departments.find_one({"name": "Unassigned"})
-
             if not default_department:
                 dept_id = str(uuid.uuid4())
                 default_department = {
@@ -493,7 +486,6 @@ async def register(user_data: UserCreate):
                 }
                 await db.departments.insert_one(default_department)
 
-            # Build next employee_id like EMP001, EMP002, etc.
             existing_employees = await db.employees.find({}, {"employee_id": 1}).to_list(10000)
             max_num = 0
             for emp in existing_employees:
@@ -504,9 +496,6 @@ async def register(user_data: UserCreate):
                         max_num = max(max_num, int(suffix))
 
             employee_id_value = f"EMP{max_num + 1:03d}"
-
-            leave_types = await db.leave_types.find().to_list(100)
-            leave_balance = {lt["id"]: lt["days_per_year"] for lt in leave_types}
 
             new_employee = {
                 "id": str(uuid.uuid4()),
@@ -537,7 +526,7 @@ async def register(user_data: UserCreate):
                 "hourly_rate": None,
                 "skills": [],
                 "notes": "Auto-created during self-registration",
-                "leave_balance": leave_balance,
+                "leave_balance": {},
                 "created_at": datetime.utcnow(),
                 "updated_at": datetime.utcnow()
             }
@@ -546,13 +535,10 @@ async def register(user_data: UserCreate):
 
             await db.users.update_one(
                 {"id": user_id},
-                {"$set": {
-                    "employee_id": employee_id_value,
-                    "updated_at": datetime.utcnow()
-                }}
+                {"$set": {"employee_id": employee_id_value, "updated_at": datetime.utcnow()}}
             )
 
-        access_token = create_access_token(data={"sub": user_id, "role": user["role"]})
+        access_token = create_access_token(data={"sub": user_id, "role": user_data.role})
         await log_activity(user_id, "user_registered", f"New user registered: {email}")
 
         return TokenResponse(
@@ -574,7 +560,6 @@ async def register(user_data: UserCreate):
     except Exception as e:
         logger.exception("Registration failed")
         raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
-    
 @api_router.post("/auth/login", response_model=TokenResponse)
 async def login(credentials: UserLogin):
     user = await db.users.find_one({"email": credentials.email.lower()})
