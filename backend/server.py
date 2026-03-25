@@ -4,6 +4,7 @@ from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+import certifi
 import os
 import logging
 from pathlib import Path
@@ -23,10 +24,16 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 # MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ.get('DB_NAME', 'workpulse_hr')]
+mongo_url = os.environ["MONGO_URL"]
 
+client = AsyncIOMotorClient(
+    mongo_url,
+    tls=True,
+    tlsCAFile=certifi.where(),
+    serverSelectionTimeoutMS=30000,
+)
+
+db = client[os.environ.get("DB_NAME", "workpulse_hr")]
 # JWT Configuration
 SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'workpulse-hr-secret-key-2025-secure')
 ALGORITHM = "HS256"
@@ -430,9 +437,13 @@ async def log_activity(user_id: str, action: str, description: str, metadata: di
     await db.activity_logs.insert_one(activity)
 @app.on_event("startup")
 async def startup_db_check():
-    await client.admin.command("ping")
-    logger.info("MongoDB connected successfully")
-    
+    try:
+        await client.admin.command("ping")
+        logger.info("MongoDB connected successfully")
+    except Exception as e:
+        logger.exception(f"MongoDB startup check failed: {e}")
+        # do not crash the whole app during startup
+        return
 # ===== Authentication Routes =====
 @api_router.post("/auth/register", response_model=TokenResponse)
 async def register(user_data: UserCreate):
