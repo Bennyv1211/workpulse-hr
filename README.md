@@ -158,3 +158,4 @@ For support, email support@peopleflow.hr or open an issue.
 ---
 
 Built with ❤️ using Expo and FastAPI
+"# workpulse-hr" 
