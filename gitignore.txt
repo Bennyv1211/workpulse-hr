@@ -7,7 +7,9 @@
 *.jks
 **/android/app/*.keystore
 **/android/app/*.jks
-
+.env
+__pycache__/
+node_modules/
 # Credentials and secrets
 credentials.json
 google-services.json
