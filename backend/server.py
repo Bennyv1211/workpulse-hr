@@ -428,70 +428,153 @@ async def log_activity(user_id: str, action: str, description: str, metadata: di
         "created_at": datetime.utcnow()
     }
     await db.activity_logs.insert_one(activity)
-
+@app.on_event("startup")
+async def startup_db_check():
+    await client.admin.command("ping")
+    logger.info("MongoDB connected successfully")
+    
 # ===== Authentication Routes =====
 @api_router.post("/auth/register", response_model=TokenResponse)
 async def register(user_data: UserCreate):
-    existing_user = await db.users.find_one({"email": user_data.email.lower()})
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
+    try:
+        email = user_data.email.lower()
 
-    # Find employee profile by email
-    employee = await db.employees.find_one({"email": user_data.email.lower()})
-    if not employee:
-        raise HTTPException(
-            status_code=400,
-            detail="No employee profile found. Contact HR."
-        )
+        existing_user = await db.users.find_one({"email": email})
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Email already registered")
 
-    if employee.get("user_id"):
-        raise HTTPException(
-            status_code=400,
-            detail="Employee already has an account."
-        )
+        # Reuse existing employee profile if one already exists for this email,
+        # otherwise create a new one automatically.
+        employee = await db.employees.find_one({"email": email})
 
-    user_id = str(uuid.uuid4())
+        user_id = str(uuid.uuid4())
 
-    user = {
-        "id": user_id,
-        "email": user_data.email.lower(),
-        "password_hash": get_password_hash(user_data.password),
-        "first_name": user_data.first_name,
-        "last_name": user_data.last_name,
-        "role": user_data.role,
-        "employee_id": employee.get("employee_id"),
-        "onboarding_completed": False,
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow()
-    }
-
-    await db.users.insert_one(user)
-
-    # Link user to employee record
-    await db.employees.update_one(
-        {"id": employee["id"]},
-        {"$set": {
-            "user_id": user_id,
+        user = {
+            "id": user_id,
+            "email": email,
+            "password_hash": get_password_hash(user_data.password),
+            "first_name": user_data.first_name,
+            "last_name": user_data.last_name,
+            "role": user_data.role,
+            "employee_id": employee.get("employee_id") if employee else None,
+            "onboarding_completed": False,
+            "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow()
-        }}
-    )
+        }
 
-    access_token = create_access_token(data={"sub": user_id, "role": user["role"]})
-    await log_activity(user_id, "user_registered", f"New user registered: {user_data.email}")
+        await db.users.insert_one(user)
 
-    return TokenResponse(
-        access_token=access_token,
-        user=UserResponse(
-            id=user_id,
-            email=user["email"],
-            first_name=user["first_name"],
-            last_name=user["last_name"],
-            role=user["role"],
-            employee_id=user["employee_id"],
-            onboarding_completed=user["onboarding_completed"],
-            created_at=user["created_at"]
+        if employee:
+            if employee.get("user_id"):
+                raise HTTPException(status_code=400, detail="Employee already has an account.")
+
+            await db.employees.update_one(
+                {"id": employee["id"]},
+                {"$set": {
+                    "user_id": user_id,
+                    "updated_at": datetime.utcnow()
+                }}
+            )
+
+            employee_id_value = employee.get("employee_id")
+        else:
+            # Find or create a default "Unassigned" department
+            default_department = await db.departments.find_one({"name": "Unassigned"})
+
+            if not default_department:
+                dept_id = str(uuid.uuid4())
+                default_department = {
+                    "id": dept_id,
+                    "name": "Unassigned",
+                    "description": "Default department for self-registered users",
+                    "manager_id": None,
+                    "budget": None,
+                    "created_at": datetime.utcnow()
+                }
+                await db.departments.insert_one(default_department)
+
+            # Build next employee_id like EMP001, EMP002, etc.
+            existing_employees = await db.employees.find({}, {"employee_id": 1}).to_list(10000)
+            max_num = 0
+            for emp in existing_employees:
+                emp_code = emp.get("employee_id", "")
+                if isinstance(emp_code, str) and emp_code.startswith("EMP"):
+                    suffix = emp_code[3:]
+                    if suffix.isdigit():
+                        max_num = max(max_num, int(suffix))
+
+            employee_id_value = f"EMP{max_num + 1:03d}"
+
+            leave_types = await db.leave_types.find().to_list(100)
+            leave_balance = {lt["id"]: lt["days_per_year"] for lt in leave_types}
+
+            new_employee = {
+                "id": str(uuid.uuid4()),
+                "user_id": user_id,
+                "employee_id": employee_id_value,
+                "first_name": user_data.first_name,
+                "last_name": user_data.last_name,
+                "email": email,
+                "phone": None,
+                "job_title": "Employee",
+                "department_id": default_department["id"],
+                "manager_id": None,
+                "work_location_id": None,
+                "work_location": "Office",
+                "employment_type": "Full-time",
+                "start_date": datetime.utcnow().strftime("%Y-%m-%d"),
+                "status": "active",
+                "date_of_birth": None,
+                "address": None,
+                "city": None,
+                "state": None,
+                "zip_code": None,
+                "country": "USA",
+                "emergency_contact": None,
+                "bank_info": None,
+                "tax_id": None,
+                "salary": None,
+                "hourly_rate": None,
+                "skills": [],
+                "notes": "Auto-created during self-registration",
+                "leave_balance": leave_balance,
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow()
+            }
+
+            await db.employees.insert_one(new_employee)
+
+            await db.users.update_one(
+                {"id": user_id},
+                {"$set": {
+                    "employee_id": employee_id_value,
+                    "updated_at": datetime.utcnow()
+                }}
+            )
+
+        access_token = create_access_token(data={"sub": user_id, "role": user["role"]})
+        await log_activity(user_id, "user_registered", f"New user registered: {email}")
+
+        return TokenResponse(
+            access_token=access_token,
+            user=UserResponse(
+                id=user_id,
+                email=email,
+                first_name=user_data.first_name,
+                last_name=user_data.last_name,
+                role=user_data.role,
+                employee_id=employee_id_value,
+                onboarding_completed=False,
+                created_at=user["created_at"]
+            )
         )
-    )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Registration failed")
+        raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
+    
 @api_router.post("/auth/login", response_model=TokenResponse)
 async def login(credentials: UserLogin):
     user = await db.users.find_one({"email": credentials.email.lower()})
