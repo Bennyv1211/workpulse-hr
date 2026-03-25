@@ -435,8 +435,23 @@ async def register(user_data: UserCreate):
     existing_user = await db.users.find_one({"email": user_data.email.lower()})
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
-    
+
+    # Find employee profile by email
+    employee = await db.employees.find_one({"email": user_data.email.lower()})
+    if not employee:
+        raise HTTPException(
+            status_code=400,
+            detail="No employee profile found. Contact HR."
+        )
+
+    if employee.get("user_id"):
+        raise HTTPException(
+            status_code=400,
+            detail="Employee already has an account."
+        )
+
     user_id = str(uuid.uuid4())
+
     user = {
         "id": user_id,
         "email": user_data.email.lower(),
@@ -444,16 +459,26 @@ async def register(user_data: UserCreate):
         "first_name": user_data.first_name,
         "last_name": user_data.last_name,
         "role": user_data.role,
-        "employee_id": None,
+        "employee_id": employee.get("employee_id"),
         "onboarding_completed": False,
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow()
     }
+
     await db.users.insert_one(user)
-    
+
+    # Link user to employee record
+    await db.employees.update_one(
+        {"id": employee["id"]},
+        {"$set": {
+            "user_id": user_id,
+            "updated_at": datetime.utcnow()
+        }}
+    )
+
     access_token = create_access_token(data={"sub": user_id, "role": user["role"]})
     await log_activity(user_id, "user_registered", f"New user registered: {user_data.email}")
-    
+
     return TokenResponse(
         access_token=access_token,
         user=UserResponse(
@@ -467,7 +492,6 @@ async def register(user_data: UserCreate):
             created_at=user["created_at"]
         )
     )
-
 @api_router.post("/auth/login", response_model=TokenResponse)
 async def login(credentials: UserLogin):
     user = await db.users.find_one({"email": credentials.email.lower()})
