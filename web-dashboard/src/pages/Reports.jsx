@@ -16,7 +16,7 @@ import {
 export default function Reports() {
   const exportMutation = useMutation({
     mutationFn: async ({ entity, format }) => {
-      const response = await api.get(`/api/export/${entity}?format=${format}`, {
+      const response = await api.get(`/export/${entity}?format=${format}`, {
         responseType: 'blob'
       })
       return { data: response.data, entity, format }
