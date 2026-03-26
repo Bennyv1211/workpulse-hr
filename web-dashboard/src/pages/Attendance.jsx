@@ -20,7 +20,7 @@ export default function Attendance() {
   const { data: attendance = [], isLoading } = useQuery({
     queryKey: ['attendance'],
     queryFn: async () => {
-      const response = await api.get('/api/attendance')
+      const response = await api.get('/attendance')
       return response.data
     }
   })
@@ -28,7 +28,7 @@ export default function Attendance() {
   const { data: stats } = useQuery({
     queryKey: ['dashboard-stats'],
     queryFn: async () => {
-      const response = await api.get('/api/dashboard/stats')
+      const response = await api.get('/dashboard/stats')
       return response.data
     }
   })

@@ -18,7 +18,7 @@ export function AuthProvider({ children }) {
 
   const fetchUser = async () => {
     try {
-      const response = await api.get('/api/auth/me')
+      const response = await api.get('/auth/me')
       setUser(response.data)
     } catch (error) {
       console.error('Auth error:', error)
@@ -30,13 +30,13 @@ export function AuthProvider({ children }) {
   }
 
   const login = async (email, password) => {
-    const response = await api.post('/api/auth/login', { email, password })
-    const { access_token, user: userData } = response.data
-    localStorage.setItem('token', access_token)
-    setToken(access_token)
-    setUser(userData)
-    return userData
-  }
+  const response = await api.post('/auth/login', { email, password })
+  const { access_token, user: userData } = response.data
+  localStorage.setItem('token', access_token)
+  setToken(access_token)
+  setUser(userData)
+  return userData
+}
 
   const logout = () => {
     localStorage.removeItem('token')

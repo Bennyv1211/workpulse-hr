@@ -28,7 +28,7 @@ export default function Employees() {
       const params = new URLSearchParams()
       if (search) params.append('search', search)
       if (departmentFilter) params.append('department_id', departmentFilter)
-      const response = await api.get(`/api/employees?${params}`)
+      const response = await api.get(`/employees?${params}`)
       return response.data
     }
   })
@@ -36,14 +36,14 @@ export default function Employees() {
   const { data: departments = [] } = useQuery({
     queryKey: ['departments'],
     queryFn: async () => {
-      const response = await api.get('/api/departments')
+      const response = await api.get('/departments')
       return response.data
     }
   })
 
   const exportMutation = useMutation({
     mutationFn: async () => {
-      const response = await api.get('/api/export/employees?format=csv', {
+      const response = await api.get('/export/employees?format=csv', {
         responseType: 'blob'
       })
       return response.data
