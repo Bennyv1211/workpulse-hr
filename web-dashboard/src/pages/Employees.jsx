@@ -13,13 +13,26 @@ import {
   Trash2,
   Eye,
   Download,
-  X
+  X,
+  Loader2
 } from 'lucide-react'
 
 export default function Employees() {
   const [search, setSearch] = useState('')
   const [departmentFilter, setDepartmentFilter] = useState('')
   const [selectedEmployee, setSelectedEmployee] = useState(null)
+  const [showAddModal, setShowAddModal] = useState(false)
+  const [formData, setFormData] = useState({
+    first_name: '',
+    last_name: '',
+    email: '',
+    phone: '',
+    department_id: '',
+    role: 'employee',
+    job_title: '',
+    employee_id: ''
+  })
+  const [formError, setFormError] = useState('')
   const queryClient = useQueryClient()
 
   const { data: employees = [], isLoading } = useQuery({
@@ -28,7 +41,7 @@ export default function Employees() {
       const params = new URLSearchParams()
       if (search) params.append('search', search)
       if (departmentFilter) params.append('department_id', departmentFilter)
-      const response = await api.get(`/employees?${params}`)
+      const response = await api.get(`/api/employees?${params}`)
       return response.data
     }
   })
@@ -36,14 +49,39 @@ export default function Employees() {
   const { data: departments = [] } = useQuery({
     queryKey: ['departments'],
     queryFn: async () => {
-      const response = await api.get('/departments')
+      const response = await api.get('/api/departments')
       return response.data
+    }
+  })
+
+  const addEmployeeMutation = useMutation({
+    mutationFn: async (data) => {
+      const response = await api.post('/api/employees', data)
+      return response.data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries(['employees'])
+      setShowAddModal(false)
+      setFormData({
+        first_name: '',
+        last_name: '',
+        email: '',
+        phone: '',
+        department_id: '',
+        role: 'employee',
+        job_title: '',
+        employee_id: ''
+      })
+      setFormError('')
+    },
+    onError: (error) => {
+      setFormError(error.response?.data?.detail || 'Failed to add employee')
     }
   })
 
   const exportMutation = useMutation({
     mutationFn: async () => {
-      const response = await api.get('/export/employees?format=csv', {
+      const response = await api.get('/api/export/employees?format=csv', {
         responseType: 'blob'
       })
       return response.data
@@ -57,6 +95,18 @@ export default function Employees() {
       window.URL.revokeObjectURL(url)
     }
   })
+
+  const handleAddEmployee = (e) => {
+    e.preventDefault()
+    setFormError('')
+    
+    if (!formData.first_name || !formData.last_name || !formData.email) {
+      setFormError('First name, last name, and email are required')
+      return
+    }
+    
+    addEmployeeMutation.mutate(formData)
+  }
 
   const getStatusColor = (status) => {
     switch (status) {
@@ -84,7 +134,10 @@ export default function Employees() {
             <Download className="w-4 h-4" />
             Export
           </button>
-          <button className="btn-primary flex items-center gap-2">
+          <button 
+            onClick={() => setShowAddModal(true)}
+            className="btn-primary flex items-center gap-2"
+          >
             <Plus className="w-4 h-4" />
             Add Employee
           </button>
@@ -203,6 +256,149 @@ export default function Employees() {
           </div>
         )}
       </div>
+
+      {/* Add Employee Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+              <h2 className="text-xl font-bold text-gray-900">Add New Employee</h2>
+              <button
+                onClick={() => setShowAddModal(false)}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleAddEmployee} className="p-6 space-y-4">
+              {formError && (
+                <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-lg text-sm">
+                  {formError}
+                </div>
+              )}
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">First Name *</label>
+                  <input
+                    type="text"
+                    value={formData.first_name}
+                    onChange={(e) => setFormData({...formData, first_name: e.target.value})}
+                    className="input"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Last Name *</label>
+                  <input
+                    type="text"
+                    value={formData.last_name}
+                    onChange={(e) => setFormData({...formData, last_name: e.target.value})}
+                    className="input"
+                    required
+                  />
+                </div>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
+                <input
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData({...formData, email: e.target.value})}
+                  className="input"
+                  required
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
+                <input
+                  type="tel"
+                  value={formData.phone}
+                  onChange={(e) => setFormData({...formData, phone: e.target.value})}
+                  className="input"
+                />
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Employee ID</label>
+                  <input
+                    type="text"
+                    value={formData.employee_id}
+                    onChange={(e) => setFormData({...formData, employee_id: e.target.value})}
+                    className="input"
+                    placeholder="Auto-generated if empty"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Job Title</label>
+                  <input
+                    type="text"
+                    value={formData.job_title}
+                    onChange={(e) => setFormData({...formData, job_title: e.target.value})}
+                    className="input"
+                  />
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Department</label>
+                  <select
+                    value={formData.department_id}
+                    onChange={(e) => setFormData({...formData, department_id: e.target.value})}
+                    className="input"
+                  >
+                    <option value="">Select Department</option>
+                    {departments.map((dept) => (
+                      <option key={dept.id} value={dept.id}>{dept.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+                  <select
+                    value={formData.role}
+                    onChange={(e) => setFormData({...formData, role: e.target.value})}
+                    className="input"
+                  >
+                    <option value="employee">Employee</option>
+                    <option value="manager">Manager</option>
+                    <option value="hr_admin">HR Admin</option>
+                    <option value="super_admin">Super Admin</option>
+                  </select>
+                </div>
+              </div>
+              
+              <div className="flex gap-3 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setShowAddModal(false)}
+                  className="flex-1 btn-secondary"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={addEmployeeMutation.isPending}
+                  className="flex-1 btn-primary flex items-center justify-center gap-2"
+                >
+                  {addEmployeeMutation.isPending ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Adding...
+                    </>
+                  ) : (
+                    'Add Employee'
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Employee Detail Modal */}
       {selectedEmployee && (

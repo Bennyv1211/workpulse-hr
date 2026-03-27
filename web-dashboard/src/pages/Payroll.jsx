@@ -16,7 +16,7 @@ export default function Payroll() {
   const { data: payroll = [], isLoading } = useQuery({
     queryKey: ['payroll'],
     queryFn: async () => {
-      const response = await api.get('/payroll')
+      const response = await api.get('/api/payroll')
       return response.data
     }
   })

@@ -1,12 +1,13 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { Eye, EyeOff, Mail, Lock } from 'lucide-react'
+import { Eye, EyeOff, Mail, Lock, Check } from 'lucide-react'
 
 export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
+  const [rememberMe, setRememberMe] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const { login } = useAuth()
@@ -18,8 +19,8 @@ export default function Login() {
     setLoading(true)
 
     try {
-      await login(email, password)
-      navigate('/')
+      await login(email, password, rememberMe)
+      navigate('/dashboard')
     } catch (err) {
       setError(err.response?.data?.detail || 'Invalid credentials')
     } finally {
@@ -33,11 +34,8 @@ export default function Login() {
         <div className="bg-white rounded-2xl shadow-2xl p-8">
           {/* Logo */}
           <div className="text-center mb-8">
-            <div className="w-16 h-16 bg-primary-500 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
-              <span className="text-white font-bold text-2xl">WP</span>
-            </div>
-            <h1 className="text-2xl font-bold text-gray-900">WorkPulse HR</h1>
-            <p className="text-gray-500 mt-1">Admin Dashboard</p>
+            <img src="/emplora-logo.png" alt="Emplora" className="h-16 mx-auto mb-4" />
+            <p className="text-gray-500 mt-1">Smart Attendance & Workforce Management</p>
           </div>
 
           {/* Form */}
@@ -89,6 +87,25 @@ export default function Login() {
               </div>
             </div>
 
+            {/* Remember Me */}
+            <div className="flex items-center">
+              <button
+                type="button"
+                onClick={() => setRememberMe(!rememberMe)}
+                className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+                  rememberMe ? 'bg-primary-500 border-primary-500' : 'border-gray-300'
+                }`}
+              >
+                {rememberMe && <Check className="w-3 h-3 text-white" />}
+              </button>
+              <label 
+                className="ml-2 text-sm text-gray-600 cursor-pointer"
+                onClick={() => setRememberMe(!rememberMe)}
+              >
+                Remember me
+              </label>
+            </div>
+
             <button
               type="submit"
               disabled={loading}
@@ -107,9 +124,9 @@ export default function Login() {
 
           {/* Demo credentials */}
           <div className="mt-6 p-4 bg-primary-50 rounded-lg">
-            <p className="text-sm font-medium text-primary-700 text-center">
-              Demo: Use any registered account to sign in
-            </p>
+            <p className="text-sm font-medium text-primary-700 text-center mb-2">Test Accounts</p>
+            <p className="text-xs text-gray-600 text-center">employee@test.com | hr@test.com | manager@test.com | superadmin@test.com</p>
+            <p className="text-xs text-primary-600 text-center mt-1">Password: Test123!</p>
           </div>
         </div>
       </div>

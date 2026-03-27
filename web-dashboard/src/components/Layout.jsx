@@ -16,13 +16,13 @@ import {
 } from 'lucide-react'
 
 const navigation = [
-  { name: 'Dashboard', href: '/', icon: LayoutDashboard },
-  { name: 'Employees', href: '/employees', icon: Users },
-  { name: 'Leave Requests', href: '/leave', icon: Calendar },
-  { name: 'Attendance', href: '/attendance', icon: Clock },
-  { name: 'Payroll', href: '/payroll', icon: DollarSign },
-  { name: 'Reports', href: '/reports', icon: BarChart3 },
-  { name: 'Settings', href: '/settings', icon: Settings },
+  { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+  { name: 'Employees', href: '/dashboard/employees', icon: Users },
+  { name: 'Leave Requests', href: '/dashboard/leave', icon: Calendar },
+  { name: 'Attendance', href: '/dashboard/attendance', icon: Clock },
+  { name: 'Payroll', href: '/dashboard/payroll', icon: DollarSign },
+  { name: 'Reports', href: '/dashboard/reports', icon: BarChart3 },
+  { name: 'Settings', href: '/dashboard/settings', icon: Settings },
 ]
 
 export default function Layout() {
@@ -50,13 +50,7 @@ export default function Layout() {
         <div className="flex flex-col h-full">
           {/* Logo */}
           <div className="flex items-center gap-3 px-6 py-5 border-b border-gray-100">
-            <div className="w-10 h-10 bg-primary-500 rounded-xl flex items-center justify-center">
-              <span className="text-white font-bold text-lg">WP</span>
-            </div>
-            <div>
-              <h1 className="font-bold text-gray-900">WorkPulse HR</h1>
-              <p className="text-xs text-gray-500">Admin Dashboard</p>
-            </div>
+            <img src="/emplora-logo.png" alt="Emplora" className="h-10 w-auto" />
             <button
               className="ml-auto lg:hidden"
               onClick={() => setSidebarOpen(false)}
@@ -71,7 +65,7 @@ export default function Layout() {
               <NavLink
                 key={item.name}
                 to={item.href}
-                end={item.href === '/'}
+                end={item.href === '/dashboard'}
                 className={({ isActive }) =>
                   `sidebar-link ${isActive ? 'active' : ''}`
                 }
