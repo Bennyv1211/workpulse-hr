@@ -1,10 +1,9 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, Query, Response
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, Query, Response, BackgroundTasks
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-import certifi
 import os
 import logging
 from pathlib import Path
@@ -19,25 +18,21 @@ from bson import ObjectId
 import io
 import csv
 from math import radians, cos, sin, asin, sqrt
+import asyncio
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 # MongoDB connection
-mongo_url = os.environ["MONGO_URL"]
+mongo_url = os.environ['MONGO_URL']
+client = AsyncIOMotorClient(mongo_url)
+db = client[os.environ.get('DB_NAME', 'emplora_hr')]
 
-client = AsyncIOMotorClient(
-    mongo_url,
-    tls=True,
-    tlsCAFile=certifi.where(),
-    serverSelectionTimeoutMS=30000,
-)
-
-db = client[os.environ.get("DB_NAME", "workpulse_hr")]
 # JWT Configuration
-SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'workpulse-hr-secret-key-2025-secure')
+SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'emplora-hr-secret-key-2025-secure')
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
+ACCESS_TOKEN_EXPIRE_REMEMBER_ME = 60 * 24 * 30  # 30 days for remember me
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -45,8 +40,8 @@ security = HTTPBearer()
 
 # Create the main app
 app = FastAPI(
-    title="WorkPulse HR API",
-    description="Enterprise HR Management Platform - WorkPulse HR",
+    title="Emplora HR API",
+    description="Smart Attendance & Workforce Management - Emplora",
     version="1.0.0"
 )
 
@@ -120,6 +115,11 @@ class UserCreate(BaseModel):
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
+    remember_me: bool = False
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
 
 class UserResponse(BaseModel):
     id: str
@@ -159,7 +159,7 @@ class WorkLocationCreate(BaseModel):
     address: Optional[str] = None
     latitude: float
     longitude: float
-    radius: int = 100  # meters
+    radius: int = 8047  # 5 miles in meters (default)
     department_id: Optional[str] = None
     is_active: bool = True
 
@@ -169,7 +169,8 @@ class WorkLocationResponse(BaseModel):
     address: Optional[str] = None
     latitude: float
     longitude: float
-    radius: int
+    radius: int  # in meters
+    radius_miles: float = 5.0  # for display
     department_id: Optional[str] = None
     is_active: bool
     created_at: datetime
@@ -435,149 +436,59 @@ async def log_activity(user_id: str, action: str, description: str, metadata: di
         "created_at": datetime.utcnow()
     }
     await db.activity_logs.insert_one(activity)
-@app.on_event("startup")
-async def startup_db_check():
-    try:
-        await client.admin.command("ping")
-        logger.info("MongoDB connected successfully")
-    except Exception as e:
-        logger.exception(f"MongoDB startup check failed: {e}")
-        # do not crash the whole app during startup
-        return
+
 # ===== Authentication Routes =====
 @api_router.post("/auth/register", response_model=TokenResponse)
 async def register(user_data: UserCreate):
-    try:
-        email = user_data.email.lower()
-
-        existing_user = await db.users.find_one({"email": email})
-        if existing_user:
-            raise HTTPException(status_code=400, detail="Email already registered")
-
-        employee = await db.employees.find_one({"email": email})
-        user_id = str(uuid.uuid4())
-
-        employee_id_value = None
-        if employee:
-            if employee.get("user_id"):
-                raise HTTPException(status_code=400, detail="Employee already has an account.")
-            employee_id_value = employee.get("employee_id")
-
-        user = {
-            "id": user_id,
-            "email": email,
-            "password_hash": get_password_hash(user_data.password),
-            "first_name": user_data.first_name,
-            "last_name": user_data.last_name,
-            "role": user_data.role,
-            "employee_id": employee_id_value,
-            "onboarding_completed": False,
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow()
-        }
-
-        await db.users.insert_one(user)
-
-        if employee:
-            await db.employees.update_one(
-                {"id": employee["id"]},
-                {"$set": {"user_id": user_id, "updated_at": datetime.utcnow()}}
-            )
-        else:
-            default_department = await db.departments.find_one({"name": "Unassigned"})
-            if not default_department:
-                dept_id = str(uuid.uuid4())
-                default_department = {
-                    "id": dept_id,
-                    "name": "Unassigned",
-                    "description": "Default department for self-registered users",
-                    "manager_id": None,
-                    "budget": None,
-                    "created_at": datetime.utcnow()
-                }
-                await db.departments.insert_one(default_department)
-
-            existing_employees = await db.employees.find({}, {"employee_id": 1}).to_list(10000)
-            max_num = 0
-            for emp in existing_employees:
-                emp_code = emp.get("employee_id", "")
-                if isinstance(emp_code, str) and emp_code.startswith("EMP"):
-                    suffix = emp_code[3:]
-                    if suffix.isdigit():
-                        max_num = max(max_num, int(suffix))
-
-            employee_id_value = f"EMP{max_num + 1:03d}"
-
-            new_employee = {
-                "id": str(uuid.uuid4()),
-                "user_id": user_id,
-                "employee_id": employee_id_value,
-                "first_name": user_data.first_name,
-                "last_name": user_data.last_name,
-                "email": email,
-                "phone": None,
-                "job_title": "Employee",
-                "department_id": default_department["id"],
-                "manager_id": None,
-                "work_location_id": None,
-                "work_location": "Office",
-                "employment_type": "Full-time",
-                "start_date": datetime.utcnow().strftime("%Y-%m-%d"),
-                "status": "active",
-                "date_of_birth": None,
-                "address": None,
-                "city": None,
-                "state": None,
-                "zip_code": None,
-                "country": "USA",
-                "emergency_contact": None,
-                "bank_info": None,
-                "tax_id": None,
-                "salary": None,
-                "hourly_rate": None,
-                "skills": [],
-                "notes": "Auto-created during self-registration",
-                "leave_balance": {},
-                "created_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow()
-            }
-
-            await db.employees.insert_one(new_employee)
-
-            await db.users.update_one(
-                {"id": user_id},
-                {"$set": {"employee_id": employee_id_value, "updated_at": datetime.utcnow()}}
-            )
-
-        access_token = create_access_token(data={"sub": user_id, "role": user_data.role})
-        await log_activity(user_id, "user_registered", f"New user registered: {email}")
-
-        return TokenResponse(
-            access_token=access_token,
-            user=UserResponse(
-                id=user_id,
-                email=email,
-                first_name=user_data.first_name,
-                last_name=user_data.last_name,
-                role=user_data.role,
-                employee_id=employee_id_value,
-                onboarding_completed=False,
-                created_at=user["created_at"]
-            )
+    existing_user = await db.users.find_one({"email": user_data.email.lower()})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    user_id = str(uuid.uuid4())
+    user = {
+        "id": user_id,
+        "email": user_data.email.lower(),
+        "password_hash": get_password_hash(user_data.password),
+        "first_name": user_data.first_name,
+        "last_name": user_data.last_name,
+        "role": user_data.role,
+        "employee_id": None,
+        "onboarding_completed": False,
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow()
+    }
+    await db.users.insert_one(user)
+    
+    access_token = create_access_token(data={"sub": user_id, "role": user["role"]})
+    await log_activity(user_id, "user_registered", f"New user registered: {user_data.email}")
+    
+    return TokenResponse(
+        access_token=access_token,
+        user=UserResponse(
+            id=user_id,
+            email=user["email"],
+            first_name=user["first_name"],
+            last_name=user["last_name"],
+            role=user["role"],
+            employee_id=user["employee_id"],
+            onboarding_completed=user["onboarding_completed"],
+            created_at=user["created_at"]
         )
+    )
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Registration failed")
-        raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
 @api_router.post("/auth/login", response_model=TokenResponse)
 async def login(credentials: UserLogin):
     user = await db.users.find_one({"email": credentials.email.lower()})
     if not user or not verify_password(credentials.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
-    access_token = create_access_token(data={"sub": user["id"], "role": user["role"]})
+    # Set token expiry based on remember_me
+    if credentials.remember_me:
+        expires_delta = timedelta(minutes=ACCESS_TOKEN_EXPIRE_REMEMBER_ME)
+    else:
+        expires_delta = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    
+    access_token = create_access_token(data={"sub": user["id"], "role": user["role"]}, expires_delta=expires_delta)
     await log_activity(user["id"], "user_login", f"User logged in: {user['email']}")
     
     return TokenResponse(
@@ -617,16 +528,18 @@ async def complete_onboarding(current_user: dict = Depends(get_current_user)):
 
 @api_router.put("/auth/change-password")
 async def change_password(
-    old_password: str,
-    new_password: str,
+    password_data: PasswordChange,
     current_user: dict = Depends(get_current_user)
 ):
-    if not verify_password(old_password, current_user["password_hash"]):
+    if not verify_password(password_data.current_password, current_user["password_hash"]):
         raise HTTPException(status_code=400, detail="Invalid current password")
+    
+    if len(password_data.new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
     
     await db.users.update_one(
         {"id": current_user["id"]},
-        {"$set": {"password_hash": get_password_hash(new_password), "updated_at": datetime.utcnow()}}
+        {"$set": {"password_hash": get_password_hash(password_data.new_password), "updated_at": datetime.utcnow()}}
     )
     await log_activity(current_user["id"], "password_changed", "Password changed")
     return {"message": "Password changed successfully"}
@@ -2057,10 +1970,10 @@ async def seed_demo_data(current_user: dict = Depends(get_current_user)):
     if await db.departments.count_documents({}) > 0:
         return {"message": "Data already seeded"}
     
-    # Create work locations
+    # Create work locations with 5-mile radius (8047 meters)
     work_locations = [
-        {"id": str(uuid.uuid4()), "name": "Main Office - San Francisco", "address": "123 Market Street, San Francisco, CA 94102", "latitude": 37.7749, "longitude": -122.4194, "radius": 100, "is_active": True, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow()},
-        {"id": str(uuid.uuid4()), "name": "Remote Hub - New York", "address": "456 Broadway, New York, NY 10012", "latitude": 40.7128, "longitude": -74.0060, "radius": 150, "is_active": True, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow()},
+        {"id": str(uuid.uuid4()), "name": "Main Office - San Francisco", "address": "123 Market Street, San Francisco, CA 94102", "latitude": 37.7749, "longitude": -122.4194, "radius": 8047, "is_active": True, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow()},
+        {"id": str(uuid.uuid4()), "name": "Remote Hub - New York", "address": "456 Broadway, New York, NY 10012", "latitude": 40.7128, "longitude": -74.0060, "radius": 8047, "is_active": True, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow()},
     ]
     await db.work_locations.insert_many(work_locations)
     
@@ -2212,7 +2125,7 @@ async def seed_demo_data(current_user: dict = Depends(get_current_user)):
     
     # Create announcements
     announcements = [
-        {"id": str(uuid.uuid4()), "title": "Welcome to WorkPulse HR!", "content": "We are excited to launch our new HR management system. Please explore all the features and let us know if you have any feedback.", "type": "general", "priority": "high", "author_id": current_user["id"], "is_active": True, "created_at": datetime.utcnow()},
+        {"id": str(uuid.uuid4()), "title": "Welcome to Emplora!", "content": "We are excited to launch our new HR management system. Please explore all the features and let us know if you have any feedback.", "type": "general", "priority": "high", "author_id": current_user["id"], "is_active": True, "created_at": datetime.utcnow()},
         {"id": str(uuid.uuid4()), "title": "Q3 Company Meeting", "content": "Please join us for our quarterly company meeting on July 25th at 2 PM in the main conference room.", "type": "general", "priority": "normal", "author_id": current_user["id"], "is_active": True, "created_at": datetime.utcnow()},
         {"id": str(uuid.uuid4()), "title": "New Health Benefits Package", "content": "Starting August 1st, we will be offering enhanced health benefits. Check your email for more details.", "type": "hr_notice", "priority": "high", "author_id": current_user["id"], "is_active": True, "created_at": datetime.utcnow()},
     ]
@@ -2220,10 +2133,291 @@ async def seed_demo_data(current_user: dict = Depends(get_current_user)):
     
     return {"message": "Demo data seeded successfully", "employees_created": len(employees)}
 
+# ===== Seed Test Users Route =====
+@api_router.post("/seed-test-users")
+async def seed_test_users():
+    """Seed test users for all roles - can be called without auth"""
+    test_password = get_password_hash("Test123!")
+    now = datetime.utcnow()
+    
+    # Get or create departments for test users
+    hr_dept = await db.departments.find_one({"name": "Human Resources"})
+    eng_dept = await db.departments.find_one({"name": "Engineering"})
+    
+    if not hr_dept:
+        hr_dept = {"id": str(uuid.uuid4()), "name": "Human Resources", "created_at": now}
+        await db.departments.insert_one(hr_dept)
+    if not eng_dept:
+        eng_dept = {"id": str(uuid.uuid4()), "name": "Engineering", "created_at": now}
+        await db.departments.insert_one(eng_dept)
+    
+    # Get or create a work location
+    work_loc = await db.work_locations.find_one({})
+    if not work_loc:
+        work_loc = {"id": str(uuid.uuid4()), "name": "Main Office", "latitude": 37.7749, "longitude": -122.4194, "radius": 8047, "is_active": True, "created_at": now}
+        await db.work_locations.insert_one(work_loc)
+    
+    test_users = [
+        {
+            "email": "employee@test.com",
+            "first_name": "John",
+            "last_name": "Employee",
+            "role": "employee",
+            "department": eng_dept
+        },
+        {
+            "email": "hr@test.com",
+            "first_name": "Sarah",
+            "last_name": "HR",
+            "role": "hr_admin",
+            "department": hr_dept
+        },
+        {
+            "email": "manager@test.com",
+            "first_name": "Mike",
+            "last_name": "Manager",
+            "role": "manager",
+            "department": eng_dept
+        },
+        {
+            "email": "superadmin@test.com",
+            "first_name": "Admin",
+            "last_name": "Super",
+            "role": "super_admin",
+            "department": hr_dept
+        }
+    ]
+    
+    created_users = []
+    for user_data in test_users:
+        # Check if user already exists
+        existing = await db.users.find_one({"email": user_data["email"]})
+        if existing:
+            created_users.append({"email": user_data["email"], "status": "already exists"})
+            continue
+        
+        user_id = str(uuid.uuid4())
+        employee_id = str(uuid.uuid4())
+        emp_code = f"EMP-{user_data['first_name'][:3].upper()}{str(uuid.uuid4())[:4].upper()}"
+        
+        # Create user
+        user = {
+            "id": user_id,
+            "email": user_data["email"],
+            "password_hash": test_password,
+            "first_name": user_data["first_name"],
+            "last_name": user_data["last_name"],
+            "role": user_data["role"],
+            "employee_id": employee_id,
+            "onboarding_completed": True,
+            "created_at": now,
+            "updated_at": now
+        }
+        await db.users.insert_one(user)
+        
+        # Create employee profile
+        employee = {
+            "id": employee_id,
+            "user_id": user_id,
+            "employee_id": emp_code,
+            "first_name": user_data["first_name"],
+            "last_name": user_data["last_name"],
+            "email": user_data["email"],
+            "phone": "555-0100",
+            "department_id": user_data["department"]["id"],
+            "job_title": f"{user_data['role'].replace('_', ' ').title()}",
+            "employment_type": "full_time",
+            "status": "active",
+            "start_date": "2024-01-15",
+            "work_location_id": work_loc["id"],
+            "salary": 75000 if user_data["role"] == "employee" else 95000,
+            "created_at": now,
+            "updated_at": now
+        }
+        await db.employees.insert_one(employee)
+        
+        created_users.append({"email": user_data["email"], "status": "created", "password": "Test123!"})
+    
+    return {"message": "Test users seeded", "users": created_users}
+
+# ===== Notifications Routes =====
+@api_router.get("/notifications")
+async def get_notifications(
+    limit: int = Query(default=20, le=100),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get notifications for the current user"""
+    query = {}
+    
+    # HR and admin see all notifications
+    if current_user["role"] in ["super_admin", "hr_admin"]:
+        query = {"$or": [{"target_role": {"$in": ["all", "hr_admin", "super_admin"]}}, {"target_user_id": current_user["id"]}]}
+    else:
+        query = {"$or": [{"target_role": "all"}, {"target_role": current_user["role"]}, {"target_user_id": current_user["id"]}]}
+    
+    notifications = await db.notifications.find(query).sort("created_at", -1).limit(limit).to_list(limit)
+    return [{k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in n.items() if k != "_id"} for n in notifications]
+
+@api_router.put("/notifications/{notification_id}/read")
+async def mark_notification_read(notification_id: str, current_user: dict = Depends(get_current_user)):
+    await db.notifications.update_one(
+        {"id": notification_id},
+        {"$set": {"read": True, "read_at": datetime.utcnow()}}
+    )
+    return {"message": "Notification marked as read"}
+
+# ===== Auto Clock-Out Route =====
+@api_router.post("/attendance/auto-clock-out")
+async def auto_clock_out_midnight(background_tasks: BackgroundTasks, current_user: dict = Depends(require_admin)):
+    """Manually trigger auto clock-out for all employees who forgot to clock out. Usually run at midnight via cron."""
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    
+    # Find all attendance records for today without clock_out
+    open_records = await db.attendance.find({
+        "date": today,
+        "clock_out": None
+    }).to_list(1000)
+    
+    auto_clocked = []
+    midnight = datetime.utcnow().replace(hour=23, minute=59, second=59)
+    
+    for record in open_records:
+        # Auto clock out at 11:59 PM
+        clock_in_time = datetime.fromisoformat(record["clock_in"]) if isinstance(record["clock_in"], str) else record["clock_in"]
+        total_hours = (midnight - clock_in_time).total_seconds() / 3600
+        
+        await db.attendance.update_one(
+            {"id": record["id"]},
+            {"$set": {
+                "clock_out": midnight.isoformat(),
+                "total_hours": round(total_hours, 2),
+                "auto_clocked_out": True,
+                "notes": "Auto clocked out at midnight - forgot to clock out",
+                "updated_at": datetime.utcnow()
+            }}
+        )
+        
+        # Get employee info
+        employee = await db.employees.find_one({"id": record["employee_id"]})
+        if employee:
+            auto_clocked.append({
+                "employee_id": record["employee_id"],
+                "employee_name": f"{employee.get('first_name', '')} {employee.get('last_name', '')}",
+                "clock_in": record["clock_in"]
+            })
+    
+    # Create notification for HR if there were auto clock-outs
+    if auto_clocked:
+        notification = {
+            "id": str(uuid.uuid4()),
+            "type": "auto_clock_out",
+            "title": f"Auto Clock-Out: {len(auto_clocked)} employee(s)",
+            "message": f"{len(auto_clocked)} employee(s) were auto clocked out at midnight. Please review and adjust if needed.",
+            "target_role": "hr_admin",
+            "data": {"employees": auto_clocked},
+            "read": False,
+            "created_at": datetime.utcnow()
+        }
+        await db.notifications.insert_one(notification)
+        
+        await log_activity(current_user["id"], "auto_clock_out", f"Auto clocked out {len(auto_clocked)} employees at midnight")
+    
+    return {"message": f"Auto clocked out {len(auto_clocked)} employees", "employees": auto_clocked}
+
+@api_router.put("/attendance/{attendance_id}/adjust")
+async def adjust_attendance(
+    attendance_id: str,
+    clock_in: Optional[str] = None,
+    clock_out: Optional[str] = None,
+    notes: Optional[str] = None,
+    current_user: dict = Depends(require_admin)
+):
+    """Allow HR to adjust attendance records (for missed clock-outs, corrections, etc.)"""
+    record = await db.attendance.find_one({"id": attendance_id})
+    if not record:
+        raise HTTPException(status_code=404, detail="Attendance record not found")
+    
+    update_data = {"updated_at": datetime.utcnow(), "adjusted_by": current_user["id"]}
+    
+    if clock_in:
+        update_data["clock_in"] = clock_in
+    if clock_out:
+        update_data["clock_out"] = clock_out
+    if notes:
+        update_data["notes"] = notes
+    
+    # Recalculate total hours if both clock_in and clock_out are available
+    final_clock_in = clock_in or record.get("clock_in")
+    final_clock_out = clock_out or record.get("clock_out")
+    
+    if final_clock_in and final_clock_out:
+        try:
+            ci = datetime.fromisoformat(final_clock_in) if isinstance(final_clock_in, str) else final_clock_in
+            co = datetime.fromisoformat(final_clock_out) if isinstance(final_clock_out, str) else final_clock_out
+            update_data["total_hours"] = round((co - ci).total_seconds() / 3600, 2)
+        except:
+            pass
+    
+    await db.attendance.update_one({"id": attendance_id}, {"$set": update_data})
+    await log_activity(current_user["id"], "adjust_attendance", f"Adjusted attendance record {attendance_id}")
+    
+    return {"message": "Attendance record adjusted successfully"}
+
+# ===== Role-based Dashboard Stats =====
+@api_router.get("/dashboard/my-stats")
+async def get_my_dashboard_stats(current_user: dict = Depends(get_current_user)):
+    """Get personal dashboard stats for employees"""
+    now = datetime.utcnow()
+    today = now.strftime("%Y-%m-%d")
+    month_start = now.replace(day=1).strftime("%Y-%m-%d")
+    
+    # Find employee profile
+    employee = await db.employees.find_one({"user_id": current_user["id"]})
+    if not employee:
+        return {
+            "total_hours_this_month": 0,
+            "attendance_this_month": [],
+            "today_attendance": None,
+            "leave_balance": {},
+            "recent_attendance": []
+        }
+    
+    # Get attendance for this month
+    attendance_records = await db.attendance.find({
+        "employee_id": employee["id"],
+        "date": {"$gte": month_start}
+    }).sort("date", -1).to_list(100)
+    
+    total_hours = sum(r.get("total_hours", 0) for r in attendance_records)
+    
+    # Get today's attendance
+    today_attendance = await db.attendance.find_one({
+        "employee_id": employee["id"],
+        "date": today
+    })
+    
+    # Get recent attendance (last 7 days)
+    recent = await db.attendance.find({
+        "employee_id": employee["id"]
+    }).sort("date", -1).limit(7).to_list(7)
+    
+    return {
+        "total_hours_this_month": round(total_hours, 2),
+        "days_worked_this_month": len(attendance_records),
+        "today_attendance": {k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in today_attendance.items() if k != "_id"} if today_attendance else None,
+        "recent_attendance": [{k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in r.items() if k != "_id"} for r in recent],
+        "employee_info": {
+            "id": employee["id"],
+            "name": f"{employee.get('first_name', '')} {employee.get('last_name', '')}",
+            "department_id": employee.get("department_id"),
+            "job_title": employee.get("job_title")
+        }
+    }
+
 # ===== Health Check =====
 @api_router.get("/health")
 async def health_check():
-    return {"status": "healthy", "app": "WorkPulse HR", "timestamp": datetime.utcnow().isoformat()}
+    return {"status": "healthy", "app": "Emplora", "timestamp": datetime.utcnow().isoformat()}
 
 # Include the router in the main app
 app.include_router(api_router)

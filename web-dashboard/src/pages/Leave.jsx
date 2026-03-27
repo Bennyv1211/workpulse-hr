@@ -20,14 +20,14 @@ export default function Leave() {
   const { data: leaveRequests = [], isLoading } = useQuery({
     queryKey: ['leave-requests'],
     queryFn: async () => {
-      const response = await api.get('/leave-requests')
+      const response = await api.get('/api/leave-requests')
       return response.data
     }
   })
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, status }) => {
-      const response = await api.put(`/leave-requests/${id}`, { status })
+      const response = await api.put(`/api/leave-requests/${id}`, { status })
       return response.data
     },
     onSuccess: () => {
