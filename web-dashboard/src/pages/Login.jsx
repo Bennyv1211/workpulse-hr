@@ -20,7 +20,7 @@ export default function Login() {
 
     try {
       await login(email, password, rememberMe)
-      navigate('/dashboard')
+      navigate('api/dashboard')
     } catch (err) {
       setError(err.response?.data?.detail || 'Invalid credentials')
     } finally {

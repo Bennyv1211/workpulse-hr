@@ -8,7 +8,7 @@ export default defineConfig({
     host: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:8001',
+        target: 'https://workpulse-hr.onrender.com',
         changeOrigin: true,
       }
     }
