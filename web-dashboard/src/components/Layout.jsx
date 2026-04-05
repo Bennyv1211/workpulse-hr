@@ -50,7 +50,7 @@ export default function Layout() {
         <div className="flex flex-col h-full">
           {/* Logo */}
           <div className="flex items-center gap-3 px-6 py-5 border-b border-gray-100">
-            <img src="/emplora-logo.png" alt="Emplora" className="h-10 w-auto" />
+            <img src="/emplora-wordmark.svg" alt="Emplora" className="h-10 w-auto" />
             <button
               className="ml-auto lg:hidden"
               onClick={() => setSidebarOpen(false)}

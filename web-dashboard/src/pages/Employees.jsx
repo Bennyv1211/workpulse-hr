@@ -4,13 +4,8 @@ import api from '../lib/api'
 import {
   Search,
   Plus,
-  Filter,
   Mail,
   Phone,
-  Building2,
-  MoreVertical,
-  Edit,
-  Trash2,
   Eye,
   Download,
   X,
@@ -28,9 +23,10 @@ export default function Employees() {
     email: '',
     phone: '',
     department_id: '',
-    role: 'employee',
     job_title: '',
-    employee_id: ''
+    employee_id: '',
+    start_date: '',
+    employment_type: 'Full-time'
   })
   const [formError, setFormError] = useState('')
   const queryClient = useQueryClient()
@@ -49,14 +45,26 @@ export default function Employees() {
   const { data: departments = [] } = useQuery({
     queryKey: ['departments'],
     queryFn: async () => {
-      const response = await api.get('/api/departments')
+      const response = await api.get('/departments')
       return response.data
     }
   })
 
   const addEmployeeMutation = useMutation({
     mutationFn: async (data) => {
-      const response = await api.post('/api/employees', data)
+      const payload = {
+        employee_id: data.employee_id,
+        first_name: data.first_name,
+        last_name: data.last_name,
+        email: data.email,
+        phone: data.phone || null,
+        job_title: data.job_title,
+        department_id: data.department_id,
+        employment_type: data.employment_type || 'Full-time',
+        start_date: data.start_date
+      }
+
+      const response = await api.post('/employees', payload)
       return response.data
     },
     onSuccess: () => {
@@ -68,9 +76,10 @@ export default function Employees() {
         email: '',
         phone: '',
         department_id: '',
-        role: 'employee',
         job_title: '',
-        employee_id: ''
+        employee_id: '',
+        start_date: '',
+        employment_type: 'Full-time'
       })
       setFormError('')
     },
@@ -81,7 +90,7 @@ export default function Employees() {
 
   const exportMutation = useMutation({
     mutationFn: async () => {
-      const response = await api.get('/api/export/employees?format=csv', {
+      const response = await api.get('/export/employees?format=csv', {
         responseType: 'blob'
       })
       return response.data
@@ -99,12 +108,22 @@ export default function Employees() {
   const handleAddEmployee = (e) => {
     e.preventDefault()
     setFormError('')
-    
-    if (!formData.first_name || !formData.last_name || !formData.email) {
-      setFormError('First name, last name, and email are required')
+
+    if (
+      !formData.employee_id ||
+      !formData.first_name ||
+      !formData.last_name ||
+      !formData.email ||
+      !formData.job_title ||
+      !formData.department_id ||
+      !formData.start_date
+    ) {
+      setFormError(
+        'Employee ID, first name, last name, email, job title, department, and start date are required'
+      )
       return
     }
-    
+
     addEmployeeMutation.mutate(formData)
   }
 
@@ -119,7 +138,6 @@ export default function Employees() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Employees</h1>
@@ -134,7 +152,7 @@ export default function Employees() {
             <Download className="w-4 h-4" />
             Export
           </button>
-          <button 
+          <button
             onClick={() => setShowAddModal(true)}
             className="btn-primary flex items-center gap-2"
           >
@@ -144,7 +162,6 @@ export default function Employees() {
         </div>
       </div>
 
-      {/* Filters */}
       <div className="card">
         <div className="flex flex-col sm:flex-row gap-4">
           <div className="flex-1 relative">
@@ -170,7 +187,6 @@ export default function Employees() {
         </div>
       </div>
 
-      {/* Table */}
       <div className="card p-0 overflow-hidden">
         {isLoading ? (
           <div className="flex items-center justify-center h-64">
@@ -244,9 +260,6 @@ export default function Employees() {
                         >
                           <Eye className="w-4 h-4" />
                         </button>
-                        <button className="p-2 hover:bg-gray-100 rounded-lg text-gray-600">
-                          <Edit className="w-4 h-4" />
-                        </button>
                       </div>
                     </td>
                   </tr>
@@ -257,7 +270,6 @@ export default function Employees() {
         )}
       </div>
 
-      {/* Add Employee Modal */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
@@ -270,20 +282,21 @@ export default function Employees() {
                 <X className="w-5 h-5" />
               </button>
             </div>
+
             <form onSubmit={handleAddEmployee} className="p-6 space-y-4">
               {formError && (
                 <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-lg text-sm">
                   {formError}
                 </div>
               )}
-              
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">First Name *</label>
                   <input
                     type="text"
                     value={formData.first_name}
-                    onChange={(e) => setFormData({...formData, first_name: e.target.value})}
+                    onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
                     className="input"
                     required
                   />
@@ -293,63 +306,65 @@ export default function Employees() {
                   <input
                     type="text"
                     value={formData.last_name}
-                    onChange={(e) => setFormData({...formData, last_name: e.target.value})}
+                    onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
                     className="input"
                     required
                   />
                 </div>
               </div>
-              
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
                 <input
                   type="email"
                   value={formData.email}
-                  onChange={(e) => setFormData({...formData, email: e.target.value})}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                   className="input"
                   required
                 />
               </div>
-              
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
                 <input
                   type="tel"
                   value={formData.phone}
-                  onChange={(e) => setFormData({...formData, phone: e.target.value})}
+                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                   className="input"
                 />
               </div>
-              
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Employee ID</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Employee ID *</label>
                   <input
                     type="text"
                     value={formData.employee_id}
-                    onChange={(e) => setFormData({...formData, employee_id: e.target.value})}
+                    onChange={(e) => setFormData({ ...formData, employee_id: e.target.value })}
                     className="input"
-                    placeholder="Auto-generated if empty"
+                    required
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Job Title</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Job Title *</label>
                   <input
                     type="text"
                     value={formData.job_title}
-                    onChange={(e) => setFormData({...formData, job_title: e.target.value})}
+                    onChange={(e) => setFormData({ ...formData, job_title: e.target.value })}
                     className="input"
+                    required
                   />
                 </div>
               </div>
-              
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Department</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Department *</label>
                   <select
                     value={formData.department_id}
-                    onChange={(e) => setFormData({...formData, department_id: e.target.value})}
+                    onChange={(e) => setFormData({ ...formData, department_id: e.target.value })}
                     className="input"
+                    required
                   >
                     <option value="">Select Department</option>
                     {departments.map((dept) => (
@@ -358,20 +373,32 @@ export default function Employees() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Employment Type *</label>
                   <select
-                    value={formData.role}
-                    onChange={(e) => setFormData({...formData, role: e.target.value})}
+                    value={formData.employment_type}
+                    onChange={(e) => setFormData({ ...formData, employment_type: e.target.value })}
                     className="input"
+                    required
                   >
-                    <option value="employee">Employee</option>
-                    <option value="manager">Manager</option>
-                    <option value="hr_admin">HR Admin</option>
-                    <option value="super_admin">Super Admin</option>
+                    <option value="Full-time">Full-time</option>
+                    <option value="Part-time">Part-time</option>
+                    <option value="Contract">Contract</option>
+                    <option value="Casual">Casual</option>
                   </select>
                 </div>
               </div>
-              
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Start Date *</label>
+                <input
+                  type="date"
+                  value={formData.start_date}
+                  onChange={(e) => setFormData({ ...formData, start_date: e.target.value })}
+                  className="input"
+                  required
+                />
+              </div>
+
               <div className="flex gap-3 pt-4">
                 <button
                   type="button"
@@ -400,7 +427,6 @@ export default function Employees() {
         </div>
       )}
 
-      {/* Employee Detail Modal */}
       {selectedEmployee && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -430,7 +456,7 @@ export default function Employees() {
                   </span>
                 </div>
               </div>
-              
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <p className="text-sm text-gray-500">Employee ID</p>

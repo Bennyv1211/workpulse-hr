@@ -301,11 +301,15 @@ class AttendanceClockIn(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     notes: Optional[str] = None
+    local_time: Optional[str] = None
+    timezone: Optional[str] = None
 
 class AttendanceClockOut(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     notes: Optional[str] = None
+    local_time: Optional[str] = None
+    timezone: Optional[str] = None
 
 class AttendanceResponse(BaseModel):
     id: str
@@ -316,10 +320,22 @@ class AttendanceResponse(BaseModel):
     clock_out: Optional[datetime] = None
     clock_in_location: Optional[Dict[str, float]] = None
     clock_out_location: Optional[Dict[str, float]] = None
+    clock_in_local: Optional[str] = None
+    clock_out_local: Optional[str] = None
+    timezone: Optional[str] = None
     total_hours: Optional[float] = None
     status: str = "present"
     notes: Optional[str] = None
     created_at: datetime
+
+# Employee Profile Update Model (Simplified - name, phone, next of kin only)
+class EmployeeProfileUpdate(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    phone: Optional[str] = None
+    next_of_kin_name: Optional[str] = None
+    next_of_kin_phone: Optional[str] = None
+    next_of_kin_relationship: Optional[str] = None
 
 class AttendanceManualCreate(BaseModel):
     employee_id: str
@@ -543,6 +559,531 @@ async def change_password(
     )
     await log_activity(current_user["id"], "password_changed", "Password changed")
     return {"message": "Password changed successfully"}
+
+# ===== Shift/Break Management Routes (NEW SIMPLIFIED) =====
+
+class ShiftClockRequest(BaseModel):
+    local_time: str
+    timezone: str
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
+@api_router.get("/shifts/current")
+async def get_current_shift(current_user: dict = Depends(get_current_user)):
+    """Get the current active shift for the employee"""
+    employee = await db.employees.find_one({"user_id": current_user["id"]})
+    if not employee:
+        employee = await db.employees.find_one({"email": current_user["email"]})
+    
+    if not employee:
+        return None
+    
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    shift = await db.shifts.find_one({
+        "employee_id": employee["id"],
+        "date": today,
+        "status": {"$in": ["working", "on_break"]}
+    })
+    
+    if not shift:
+        return None
+    
+    return {
+        "id": shift["id"],
+        "status": shift["status"],
+        "clock_in": shift.get("clock_in", {}).get("timestamp"),
+        "clock_in_local": shift.get("clock_in", {}).get("local_time"),
+        "current_break": shift.get("current_break"),
+        "breaks": shift.get("breaks", []),
+        "total_break_seconds": shift.get("total_break_seconds", 0)
+    }
+
+@api_router.post("/shifts/clock-in")
+async def shift_clock_in(data: ShiftClockRequest, current_user: dict = Depends(get_current_user)):
+    """Clock in and start a new shift"""
+    employee = await db.employees.find_one({"user_id": current_user["id"]})
+    if not employee:
+        employee = await db.employees.find_one({"email": current_user["email"]})
+    
+    if not employee:
+        raise HTTPException(status_code=400, detail="Employee profile not found")
+    
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    
+    # Check for existing active shift
+    existing = await db.shifts.find_one({
+        "employee_id": employee["id"],
+        "date": today,
+        "status": {"$in": ["working", "on_break"]}
+    })
+    
+    if existing:
+        raise HTTPException(status_code=400, detail="You already have an active shift")
+    
+    shift_id = str(uuid.uuid4())
+    shift = {
+        "id": shift_id,
+        "employee_id": employee["id"],
+        "date": today,
+        "status": "working",
+        "clock_in": {
+            "timestamp": datetime.utcnow(),
+            "local_time": data.local_time,
+            "timezone": data.timezone,
+            "location": {"latitude": data.latitude, "longitude": data.longitude} if data.latitude else None
+        },
+        "breaks": [],
+        "total_break_seconds": 0,
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow()
+    }
+    
+    await db.shifts.insert_one(shift)
+    await log_activity(current_user["id"], "shift_clock_in", f"Clocked in at {data.local_time}")
+    
+    return {
+        "id": shift_id,
+        "status": "working",
+        "clock_in": shift["clock_in"]["timestamp"].isoformat(),
+        "clock_in_local": data.local_time,
+        "breaks": [],
+        "total_break_seconds": 0
+    }
+
+@api_router.post("/shifts/clock-out")
+async def shift_clock_out(data: ShiftClockRequest, current_user: dict = Depends(get_current_user)):
+    """Clock out and end the current shift"""
+    employee = await db.employees.find_one({"user_id": current_user["id"]})
+    if not employee:
+        employee = await db.employees.find_one({"email": current_user["email"]})
+    
+    if not employee:
+        raise HTTPException(status_code=400, detail="Employee profile not found")
+    
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    shift = await db.shifts.find_one({
+        "employee_id": employee["id"],
+        "date": today,
+        "status": {"$in": ["working", "on_break"]}
+    })
+    
+    if not shift:
+        raise HTTPException(status_code=400, detail="No active shift found")
+    
+    if shift["status"] == "on_break":
+        raise HTTPException(status_code=400, detail="Please end your break before clocking out")
+    
+    clock_out_time = datetime.utcnow()
+    clock_in_time = shift["clock_in"]["timestamp"]
+    total_seconds = (clock_out_time - clock_in_time).total_seconds()
+    work_seconds = total_seconds - shift.get("total_break_seconds", 0)
+    work_hours = round(work_seconds / 3600, 2)
+    
+    await db.shifts.update_one(
+        {"id": shift["id"]},
+        {"$set": {
+            "status": "completed",
+            "clock_out": {
+                "timestamp": clock_out_time,
+                "local_time": data.local_time,
+                "timezone": data.timezone,
+                "location": {"latitude": data.latitude, "longitude": data.longitude} if data.latitude else None
+            },
+            "total_work_hours": work_hours,
+            "updated_at": datetime.utcnow()
+        }}
+    )
+    
+    await log_activity(current_user["id"], "shift_clock_out", f"Clocked out. Worked {work_hours} hours")
+    return {"message": "Clocked out successfully", "work_hours": work_hours}
+
+@api_router.post("/shifts/break/start")
+async def start_break(data: ShiftClockRequest, current_user: dict = Depends(get_current_user)):
+    """Start a break during an active shift"""
+    employee = await db.employees.find_one({"user_id": current_user["id"]})
+    if not employee:
+        employee = await db.employees.find_one({"email": current_user["email"]})
+    
+    if not employee:
+        raise HTTPException(status_code=400, detail="Employee profile not found")
+    
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    shift = await db.shifts.find_one({
+        "employee_id": employee["id"],
+        "date": today,
+        "status": "working"
+    })
+    
+    if not shift:
+        raise HTTPException(status_code=400, detail="You must be clocked in to start a break")
+    
+    break_id = str(uuid.uuid4())
+    current_break = {
+        "id": break_id,
+        "start": datetime.utcnow().isoformat(),
+        "start_local": data.local_time,
+        "start_location": {"latitude": data.latitude, "longitude": data.longitude} if data.latitude else None
+    }
+    
+    await db.shifts.update_one(
+        {"id": shift["id"]},
+        {"$set": {
+            "status": "on_break",
+            "current_break": current_break,
+            "updated_at": datetime.utcnow()
+        }}
+    )
+    
+    await log_activity(current_user["id"], "break_start", f"Started break at {data.local_time}")
+    
+    return {
+        "id": shift["id"],
+        "status": "on_break",
+        "clock_in": shift["clock_in"]["timestamp"].isoformat() if isinstance(shift["clock_in"]["timestamp"], datetime) else shift["clock_in"]["timestamp"],
+        "clock_in_local": shift["clock_in"].get("local_time"),
+        "current_break": current_break,
+        "breaks": shift.get("breaks", []),
+        "total_break_seconds": shift.get("total_break_seconds", 0)
+    }
+
+@api_router.post("/shifts/break/end")
+async def end_break(data: ShiftClockRequest, current_user: dict = Depends(get_current_user)):
+    """End the current break and resume work"""
+    employee = await db.employees.find_one({"user_id": current_user["id"]})
+    if not employee:
+        employee = await db.employees.find_one({"email": current_user["email"]})
+    
+    if not employee:
+        raise HTTPException(status_code=400, detail="Employee profile not found")
+    
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    shift = await db.shifts.find_one({
+        "employee_id": employee["id"],
+        "date": today,
+        "status": "on_break"
+    })
+    
+    if not shift:
+        raise HTTPException(status_code=400, detail="You are not currently on a break")
+    
+    current_break = shift.get("current_break")
+    if not current_break:
+        raise HTTPException(status_code=400, detail="No active break found")
+    
+    break_start = datetime.fromisoformat(current_break["start"])
+    break_end = datetime.utcnow()
+    break_duration = int((break_end - break_start).total_seconds())
+    
+    completed_break = {
+        "id": current_break["id"],
+        "start": current_break["start"],
+        "start_local": current_break.get("start_local"),
+        "start_location": current_break.get("start_location"),
+        "end": break_end.isoformat(),
+        "end_local": data.local_time,
+        "end_location": {"latitude": data.latitude, "longitude": data.longitude} if data.latitude else None,
+        "duration_seconds": break_duration
+    }
+    
+    breaks = shift.get("breaks", [])
+    breaks.append(completed_break)
+    total_break_seconds = shift.get("total_break_seconds", 0) + break_duration
+    
+    await db.shifts.update_one(
+        {"id": shift["id"]},
+        {"$set": {
+            "status": "working",
+            "current_break": None,
+            "breaks": breaks,
+            "total_break_seconds": total_break_seconds,
+            "updated_at": datetime.utcnow()
+        }}
+    )
+    
+    await log_activity(current_user["id"], "break_end", f"Ended break after {break_duration // 60} minutes")
+    
+    return {
+        "id": shift["id"],
+        "status": "working",
+        "clock_in": shift["clock_in"]["timestamp"].isoformat() if isinstance(shift["clock_in"]["timestamp"], datetime) else shift["clock_in"]["timestamp"],
+        "clock_in_local": shift["clock_in"].get("local_time"),
+        "current_break": None,
+        "breaks": breaks,
+        "total_break_seconds": total_break_seconds
+    }
+
+@api_router.get("/shifts/history")
+async def get_shift_history(
+    limit: int = Query(default=30, ge=1, le=100),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get shift history for the employee"""
+    employee = await db.employees.find_one({"user_id": current_user["id"]})
+    if not employee:
+        employee = await db.employees.find_one({"email": current_user["email"]})
+    
+    if not employee:
+        return []
+    
+    shifts = await db.shifts.find(
+        {"employee_id": employee["id"]}
+    ).sort("date", -1).limit(limit).to_list(limit)
+    
+    return [{
+        "id": s["id"],
+        "date": s["date"],
+        "status": s["status"],
+        "clock_in_local": s.get("clock_in", {}).get("local_time"),
+        "clock_out_local": s.get("clock_out", {}).get("local_time"),
+        "total_work_hours": s.get("total_work_hours"),
+        "breaks_count": len(s.get("breaks", []))
+    } for s in shifts]
+
+# ===== Time-Off Request Routes (NEW SIMPLIFIED) =====
+
+class TimeOffRequest(BaseModel):
+    start_date: str
+    end_date: str
+    note: Optional[str] = None
+
+@api_router.get("/time-off")
+async def get_time_off_requests(current_user: dict = Depends(get_current_user)):
+    """Get all time-off requests for the current user"""
+    employee = await db.employees.find_one({"user_id": current_user["id"]})
+    if not employee:
+        employee = await db.employees.find_one({"email": current_user["email"]})
+    
+    if not employee:
+        return []
+    
+    requests = await db.time_off_requests.find(
+        {"employee_id": employee["id"]}
+    ).sort("created_at", -1).to_list(100)
+    
+    return [{
+        "id": r["id"],
+        "start_date": r["start_date"],
+        "end_date": r["end_date"],
+        "note": r.get("note"),
+        "status": r["status"],
+        "days_count": r.get("days_count", 1),
+        "created_at": r["created_at"].isoformat() if isinstance(r["created_at"], datetime) else r["created_at"],
+        "review_note": r.get("review_note")
+    } for r in requests]
+
+@api_router.post("/time-off")
+async def create_time_off_request(data: TimeOffRequest, current_user: dict = Depends(get_current_user)):
+    """Submit a new time-off request"""
+    employee = await db.employees.find_one({"user_id": current_user["id"]})
+    if not employee:
+        employee = await db.employees.find_one({"email": current_user["email"]})
+    
+    if not employee:
+        raise HTTPException(status_code=400, detail="Employee profile not found")
+    
+    # Calculate days
+    start = datetime.strptime(data.start_date, "%Y-%m-%d")
+    end = datetime.strptime(data.end_date, "%Y-%m-%d")
+    days_count = (end - start).days + 1
+    
+    if days_count < 1:
+        raise HTTPException(status_code=400, detail="Invalid date range")
+    
+    request_id = str(uuid.uuid4())
+    request = {
+        "id": request_id,
+        "employee_id": employee["id"],
+        "start_date": data.start_date,
+        "end_date": data.end_date,
+        "note": data.note,
+        "status": "pending",
+        "days_count": days_count,
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow()
+    }
+    
+    await db.time_off_requests.insert_one(request)
+    await log_activity(current_user["id"], "time_off_request", f"Requested {days_count} days off: {data.start_date} to {data.end_date}")
+    
+    return {
+        "id": request_id,
+        "message": "Time-off request submitted successfully"
+    }
+
+@api_router.delete("/time-off/{request_id}")
+async def cancel_time_off_request(request_id: str, current_user: dict = Depends(get_current_user)):
+    """Cancel a pending time-off request"""
+    employee = await db.employees.find_one({"user_id": current_user["id"]})
+    if not employee:
+        employee = await db.employees.find_one({"email": current_user["email"]})
+    
+    if not employee:
+        raise HTTPException(status_code=400, detail="Employee profile not found")
+    
+    request = await db.time_off_requests.find_one({
+        "id": request_id,
+        "employee_id": employee["id"]
+    })
+    
+    if not request:
+        raise HTTPException(status_code=404, detail="Request not found")
+    
+    if request["status"] != "pending":
+        raise HTTPException(status_code=400, detail="Can only cancel pending requests")
+    
+    await db.time_off_requests.delete_one({"id": request_id})
+    await log_activity(current_user["id"], "time_off_cancelled", f"Cancelled time-off request")
+    
+    return {"message": "Request cancelled successfully"}
+
+# ===== Paystub Routes (NEW) =====
+
+@api_router.get("/paystubs")
+async def get_paystubs(current_user: dict = Depends(get_current_user)):
+    """Get all paystubs for the current employee"""
+    employee = await db.employees.find_one({"user_id": current_user["id"]})
+    if not employee:
+        employee = await db.employees.find_one({"email": current_user["email"]})
+    
+    if not employee:
+        return []
+    
+    paystubs = await db.paystubs.find(
+        {"employee_id": employee["id"]}
+    ).sort("pay_date", -1).to_list(100)
+    
+    return [{
+        "id": p["id"],
+        "pay_period_start": p["pay_period_start"],
+        "pay_period_end": p["pay_period_end"],
+        "pay_date": p["pay_date"],
+        "gross_pay": p.get("gross_pay", 0),
+        "net_pay": p.get("net_pay", 0),
+        "pdf_filename": p.get("pdf_filename", "Paystub.pdf")
+    } for p in paystubs]
+
+@api_router.get("/paystubs/{paystub_id}/download")
+async def download_paystub(paystub_id: str, token: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Download a paystub PDF"""
+    employee = await db.employees.find_one({"user_id": current_user["id"]})
+    if not employee:
+        employee = await db.employees.find_one({"email": current_user["email"]})
+    
+    paystub = await db.paystubs.find_one({
+        "id": paystub_id,
+        "employee_id": employee["id"] if employee else None
+    })
+    
+    if not paystub:
+        raise HTTPException(status_code=404, detail="Paystub not found")
+    
+    # Return a placeholder PDF or the actual file
+    pdf_content = paystub.get("pdf_content")
+    if pdf_content:
+        return Response(
+            content=pdf_content,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={paystub.get('pdf_filename', 'paystub.pdf')}"}
+        )
+    
+    raise HTTPException(status_code=404, detail="PDF not available")
+
+# ===== Admin Time-Off Management Routes =====
+
+@api_router.get("/admin/time-off")
+async def admin_get_time_off_requests(
+    status: Optional[str] = None,
+    current_user: dict = Depends(require_admin)
+):
+    """Get all time-off requests (admin/manager only)"""
+    query = {}
+    if status:
+        query["status"] = status
+    
+    requests = await db.time_off_requests.find(query).sort("created_at", -1).to_list(500)
+    
+    result = []
+    for r in requests:
+        employee = await db.employees.find_one({"id": r["employee_id"]})
+        result.append({
+            "id": r["id"],
+            "employee_id": r["employee_id"],
+            "employee_name": f"{employee.get('first_name', '')} {employee.get('last_name', '')}" if employee else "Unknown",
+            "start_date": r["start_date"],
+            "end_date": r["end_date"],
+            "note": r.get("note"),
+            "status": r["status"],
+            "days_count": r.get("days_count", 1),
+            "created_at": r["created_at"].isoformat() if isinstance(r["created_at"], datetime) else r["created_at"],
+            "review_note": r.get("review_note")
+        })
+    
+    return result
+
+@api_router.put("/admin/time-off/{request_id}")
+async def admin_review_time_off(
+    request_id: str,
+    action: str = Query(..., regex="^(approve|deny)$"),
+    note: Optional[str] = None,
+    current_user: dict = Depends(require_admin)
+):
+    """Approve or deny a time-off request (admin/manager only)"""
+    request = await db.time_off_requests.find_one({"id": request_id})
+    
+    if not request:
+        raise HTTPException(status_code=404, detail="Request not found")
+    
+    new_status = "approved" if action == "approve" else "denied"
+    
+    await db.time_off_requests.update_one(
+        {"id": request_id},
+        {"$set": {
+            "status": new_status,
+            "reviewed_by": current_user["id"],
+            "reviewed_at": datetime.utcnow(),
+            "review_note": note,
+            "updated_at": datetime.utcnow()
+        }}
+    )
+    
+    await log_activity(current_user["id"], f"time_off_{action}d", f"Time-off request {action}d")
+    
+    return {"message": f"Request {new_status}"}
+
+# ===== Admin Shift Routes =====
+
+@api_router.get("/admin/shifts")
+async def admin_get_shifts(
+    date: Optional[str] = None,
+    employee_id: Optional[str] = None,
+    current_user: dict = Depends(require_admin)
+):
+    """Get all shifts (admin/manager only)"""
+    query = {}
+    if date:
+        query["date"] = date
+    if employee_id:
+        query["employee_id"] = employee_id
+    
+    shifts = await db.shifts.find(query).sort("date", -1).limit(500).to_list(500)
+    
+    result = []
+    for s in shifts:
+        employee = await db.employees.find_one({"id": s["employee_id"]})
+        result.append({
+            "id": s["id"],
+            "employee_id": s["employee_id"],
+            "employee_name": f"{employee.get('first_name', '')} {employee.get('last_name', '')}" if employee else "Unknown",
+            "date": s["date"],
+            "status": s["status"],
+            "clock_in": s.get("clock_in"),
+            "clock_out": s.get("clock_out"),
+            "breaks": s.get("breaks", []),
+            "total_work_hours": s.get("total_work_hours"),
+            "total_break_seconds": s.get("total_break_seconds", 0)
+        })
+    
+    return result
 
 # ===== Work Location Routes (GPS) =====
 @api_router.post("/work-locations", response_model=WorkLocationResponse)
@@ -919,6 +1460,117 @@ async def get_employee(emp_id: str, current_user: dict = Depends(get_current_use
         created_at=emp["created_at"]
     )
 
+# ===== Employee Profile Self-Service Routes =====
+@api_router.get("/employees/me")
+async def get_my_employee_profile(current_user: dict = Depends(get_current_user)):
+    """Get the current user's employee profile with all personal info"""
+    employee = await db.employees.find_one({"user_id": current_user["id"]})
+    if not employee:
+        employee = await db.employees.find_one({"email": current_user["email"]})
+    if not employee:
+        # Return basic info from user if no employee record exists
+        return {
+            "first_name": current_user.get("first_name", ""),
+            "last_name": current_user.get("last_name", ""),
+            "email": current_user.get("email", ""),
+            "phone": "",
+            "next_of_kin_name": "",
+            "next_of_kin_phone": "",
+            "next_of_kin_relationship": ""
+        }
+    
+    # Get next of kin info from emergency_contact if available
+    emergency = employee.get("emergency_contact") or {}
+    
+    return {
+        "id": employee.get("id"),
+        "first_name": employee.get("first_name", ""),
+        "last_name": employee.get("last_name", ""),
+        "email": employee.get("email", ""),
+        "phone": employee.get("phone", ""),
+        "next_of_kin_name": employee.get("next_of_kin_name") or emergency.get("name", ""),
+        "next_of_kin_phone": employee.get("next_of_kin_phone") or emergency.get("phone", ""),
+        "next_of_kin_relationship": employee.get("next_of_kin_relationship") or emergency.get("relationship", "")
+    }
+
+@api_router.put("/employees/me")
+async def update_my_employee_profile(data: EmployeeProfileUpdate, current_user: dict = Depends(get_current_user)):
+    """Update the current user's personal profile (name, phone, next of kin)"""
+    employee = await db.employees.find_one({"user_id": current_user["id"]})
+    if not employee:
+        employee = await db.employees.find_one({"email": current_user["email"]})
+    
+    update_dict = {}
+    
+    # Only update provided fields (name, phone, next of kin)
+    if data.first_name is not None:
+        update_dict["first_name"] = data.first_name
+    if data.last_name is not None:
+        update_dict["last_name"] = data.last_name
+    if data.phone is not None:
+        update_dict["phone"] = data.phone
+    
+    # Store next of kin as separate fields for easy access
+    if data.next_of_kin_name is not None:
+        update_dict["next_of_kin_name"] = data.next_of_kin_name
+    if data.next_of_kin_phone is not None:
+        update_dict["next_of_kin_phone"] = data.next_of_kin_phone
+    if data.next_of_kin_relationship is not None:
+        update_dict["next_of_kin_relationship"] = data.next_of_kin_relationship
+    
+    # Also update emergency_contact for compatibility
+    if data.next_of_kin_name or data.next_of_kin_phone or data.next_of_kin_relationship:
+        current_emergency = employee.get("emergency_contact") if employee else {}
+        if not current_emergency:
+            current_emergency = {}
+        update_dict["emergency_contact"] = {
+            "name": data.next_of_kin_name or current_emergency.get("name", ""),
+            "phone": data.next_of_kin_phone or current_emergency.get("phone", ""),
+            "relationship": data.next_of_kin_relationship or current_emergency.get("relationship", "")
+        }
+    
+    update_dict["updated_at"] = datetime.utcnow()
+    
+    if employee:
+        await db.employees.update_one({"id": employee["id"]}, {"$set": update_dict})
+        await log_activity(current_user["id"], "profile_updated", "Employee updated their personal profile")
+    else:
+        # Create a minimal employee record if one doesn't exist
+        emp_id = str(uuid.uuid4())
+        new_employee = {
+            "id": emp_id,
+            "user_id": current_user["id"],
+            "employee_id": f"EMP{emp_id[:8].upper()}",
+            "first_name": data.first_name or current_user.get("first_name", ""),
+            "last_name": data.last_name or current_user.get("last_name", ""),
+            "email": current_user["email"],
+            "phone": data.phone or "",
+            "job_title": "Employee",
+            "department_id": "",
+            "employment_type": "Full-time",
+            "start_date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "status": "active",
+            "next_of_kin_name": data.next_of_kin_name or "",
+            "next_of_kin_phone": data.next_of_kin_phone or "",
+            "next_of_kin_relationship": data.next_of_kin_relationship or "",
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
+        }
+        await db.employees.insert_one(new_employee)
+        await log_activity(current_user["id"], "profile_created", "Employee created their profile")
+    
+    # Also update the user record if name changed
+    if data.first_name or data.last_name:
+        user_update = {}
+        if data.first_name:
+            user_update["first_name"] = data.first_name
+        if data.last_name:
+            user_update["last_name"] = data.last_name
+        user_update["updated_at"] = datetime.utcnow()
+        await db.users.update_one({"id": current_user["id"]}, {"$set": user_update})
+    
+    return {"message": "Profile updated successfully"}
+
 @api_router.put("/employees/{emp_id}", response_model=EmployeeResponse)
 async def update_employee(emp_id: str, emp_data: EmployeeCreate, current_user: dict = Depends(require_manager)):
     update_dict = emp_data.dict(exclude_unset=True)
@@ -1143,7 +1795,15 @@ async def clock_in(data: AttendanceClockIn, current_user: dict = Depends(get_cur
     if existing and existing.get("clock_in"):
         raise HTTPException(status_code=400, detail="Already clocked in today")
     
-    now = datetime.utcnow()
+    # Use local time from device if provided, otherwise use server time
+    if data.local_time:
+        try:
+            now = datetime.fromisoformat(data.local_time.replace('Z', '+00:00'))
+        except:
+            now = datetime.utcnow()
+    else:
+        now = datetime.utcnow()
+    
     att_id = str(uuid.uuid4())
     status = "present"
     if now.hour >= 9 and now.minute > 15:
@@ -1157,13 +1817,16 @@ async def clock_in(data: AttendanceClockIn, current_user: dict = Depends(get_cur
         "clock_out": None,
         "clock_in_location": {"latitude": data.latitude, "longitude": data.longitude} if data.latitude else None,
         "clock_out_location": None,
+        "clock_in_local": data.local_time,
+        "clock_out_local": None,
+        "timezone": data.timezone,
         "total_hours": None,
         "status": status,
         "notes": data.notes,
         "created_at": now
     }
     await db.attendance.insert_one(attendance)
-    await log_activity(current_user["id"], "clock_in", f"Clocked in at {now.strftime('%H:%M')}")
+    await log_activity(current_user["id"], "clock_in", f"Clocked in at {now.strftime('%H:%M')} ({data.timezone or 'UTC'})")
     
     return AttendanceResponse(
         id=att_id,
@@ -1174,6 +1837,9 @@ async def clock_in(data: AttendanceClockIn, current_user: dict = Depends(get_cur
         clock_out=None,
         clock_in_location=attendance["clock_in_location"],
         clock_out_location=None,
+        clock_in_local=data.local_time,
+        clock_out_local=None,
+        timezone=data.timezone,
         total_hours=None,
         status=status,
         notes=data.notes,
@@ -1205,7 +1871,15 @@ async def clock_out(data: AttendanceClockOut, current_user: dict = Depends(get_c
     if attendance.get("clock_out"):
         raise HTTPException(status_code=400, detail="Already clocked out today")
     
-    now = datetime.utcnow()
+    # Use local time from device if provided, otherwise use server time
+    if data.local_time:
+        try:
+            now = datetime.fromisoformat(data.local_time.replace('Z', '+00:00'))
+        except:
+            now = datetime.utcnow()
+    else:
+        now = datetime.utcnow()
+    
     clock_in = attendance["clock_in"]
     total_hours = round((now - clock_in).total_seconds() / 3600, 2)
     
@@ -1214,11 +1888,12 @@ async def clock_out(data: AttendanceClockOut, current_user: dict = Depends(get_c
         {"$set": {
             "clock_out": now,
             "clock_out_location": {"latitude": data.latitude, "longitude": data.longitude} if data.latitude else None,
+            "clock_out_local": data.local_time,
             "total_hours": total_hours,
             "notes": data.notes or attendance.get("notes")
         }}
     )
-    await log_activity(current_user["id"], "clock_out", f"Clocked out at {now.strftime('%H:%M')}, worked {total_hours}h")
+    await log_activity(current_user["id"], "clock_out", f"Clocked out at {now.strftime('%H:%M')} ({data.timezone or 'UTC'}), worked {total_hours}h")
     
     return AttendanceResponse(
         id=attendance["id"],
@@ -1229,6 +1904,9 @@ async def clock_out(data: AttendanceClockOut, current_user: dict = Depends(get_c
         clock_out=now,
         clock_in_location=attendance.get("clock_in_location"),
         clock_out_location={"latitude": data.latitude, "longitude": data.longitude} if data.latitude else None,
+        clock_in_local=attendance.get("clock_in_local"),
+        clock_out_local=data.local_time,
+        timezone=attendance.get("timezone") or data.timezone,
         total_hours=total_hours,
         status=attendance["status"],
         notes=data.notes or attendance.get("notes"),

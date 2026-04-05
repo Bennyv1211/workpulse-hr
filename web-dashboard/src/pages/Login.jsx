@@ -20,7 +20,7 @@ export default function Login() {
 
     try {
       await login(email, password, rememberMe)
-      navigate('api/dashboard')
+      navigate('/dashboard')
     } catch (err) {
       setError(err.response?.data?.detail || 'Invalid credentials')
     } finally {
@@ -34,7 +34,7 @@ export default function Login() {
         <div className="bg-white rounded-2xl shadow-2xl p-8">
           {/* Logo */}
           <div className="text-center mb-8">
-            <img src="/emplora-logo.png" alt="Emplora" className="h-16 mx-auto mb-4" />
+            <img src="/emplora-wordmark.svg" alt="Emplora" className="h-14 mx-auto mb-4" />
             <p className="text-gray-500 mt-1">Smart Attendance & Workforce Management</p>
           </div>
 
