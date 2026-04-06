@@ -19,7 +19,8 @@ import io
 import csv
 from math import radians, cos, sin, asin, sqrt
 import asyncio
-
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
@@ -103,7 +104,95 @@ async def require_manager(current_user: dict = Depends(get_current_user)):
     return current_user
 
 # ===== Pydantic Models =====
+def make_pdf_bytes(employee_name: str, employee_code: str, pay_period_start: str, pay_period_end: str, pay_date: str, gross_pay: float, net_pay: float) -> bytes:
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=letter)
+    width, height = letter
 
+    y = height - 60
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(50, y, "Emplora Paystub")
+
+    y -= 30
+    c.setFont("Helvetica", 11)
+    c.drawString(50, y, f"Employee: {employee_name}")
+    y -= 18
+    c.drawString(50, y, f"Employee ID: {employee_code}")
+    y -= 18
+    c.drawString(50, y, f"Pay Period: {pay_period_start} to {pay_period_end}")
+    y -= 18
+    c.drawString(50, y, f"Pay Date: {pay_date}")
+    y -= 30
+
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(50, y, "Earnings")
+    y -= 22
+
+    c.setFont("Helvetica", 11)
+    c.drawString(50, y, f"Gross Pay: ${gross_pay:,.2f}")
+    y -= 18
+    c.drawString(50, y, f"Net Pay: ${net_pay:,.2f}")
+
+    y -= 40
+    c.setFont("Helvetica-Oblique", 10)
+    c.drawString(50, y, "Demo paystub generated for testing.")
+
+    c.showPage()
+    c.save()
+    pdf = buffer.getvalue()
+    buffer.close()
+    return pdf
+
+
+async def seed_notification(title: str, message: str, target_role: str = "all", target_user_id: Optional[str] = None):
+    notification = {
+        "id": str(uuid.uuid4()),
+        "type": "info",
+        "title": title,
+        "message": message,
+        "target_role": target_role,
+        "target_user_id": target_user_id,
+        "read": False,
+        "created_at": datetime.utcnow(),
+    }
+    await db.notifications.insert_one(notification)
+
+
+async def clear_demo_data():
+    demo_emails = [
+        "employee@test.com",
+        "employee2@test.com",
+        "hr@test.com",
+        "manager@test.com",
+        "superadmin@test.com",
+    ]
+
+    demo_users = await db.users.find({"email": {"$in": demo_emails}}).to_list(100)
+    demo_user_ids = [u["id"] for u in demo_users]
+
+    demo_employees = await db.employees.find({"email": {"$in": demo_emails}}).to_list(100)
+    demo_employee_ids = [e["id"] for e in demo_employees]
+
+    if demo_user_ids:
+        await db.activity_logs.delete_many({"user_id": {"$in": demo_user_ids}})
+        await db.notifications.delete_many({"target_user_id": {"$in": demo_user_ids}})
+        await db.announcements.delete_many({"author_id": {"$in": demo_user_ids}})
+        await db.users.delete_many({"id": {"$in": demo_user_ids}})
+
+    if demo_employee_ids:
+        await db.attendance.delete_many({"employee_id": {"$in": demo_employee_ids}})
+        await db.shifts.delete_many({"employee_id": {"$in": demo_employee_ids}})
+        await db.leave_requests.delete_many({"employee_id": {"$in": demo_employee_ids}})
+        await db.time_off_requests.delete_many({"employee_id": {"$in": demo_employee_ids}})
+        await db.payroll.delete_many({"employee_id": {"$in": demo_employee_ids}})
+        await db.paystubs.delete_many({"employee_id": {"$in": demo_employee_ids}})
+        await db.employees.delete_many({"id": {"$in": demo_employee_ids}})
+
+    await db.training_videos.delete_many({"demo_seed": True})
+    await db.leave_types.delete_many({"demo_seed": True})
+    await db.departments.delete_many({"demo_seed": True})
+    await db.work_locations.delete_many({"demo_seed": True})
+    await db.notifications.delete_many({"demo_seed": True})
 # User/Auth Models
 class UserCreate(BaseModel):
     email: EmailStr
@@ -1741,7 +1830,43 @@ async def get_my_leave_requests(current_user: dict = Depends(get_current_user)):
     if not employee:
         return []
     return await get_leave_requests(employee_id=employee["id"], current_user=current_user)
+@api_router.get("/leave-balance/me")
+async def get_my_leave_balance(current_user: dict = Depends(get_current_user)):
+    employee = await db.employees.find_one({"user_id": current_user["id"]})
+    if not employee:
+        employee = await db.employees.find_one({"email": current_user["email"]})
 
+    if not employee:
+        return {
+            "leave_balance_hours": 0,
+            "balance_hours": 0,
+            "available_hours": 0,
+            "details": {}
+        }
+
+    leave_balance = employee.get("leave_balance", {})
+    leave_types = await db.leave_types.find().to_list(100)
+
+    details = {}
+    total_days = 0.0
+
+    for lt in leave_types:
+        days = float(leave_balance.get(lt["id"], 0))
+        details[lt["name"]] = {
+            "days": days,
+            "hours": round(days * 8, 2),
+            "leave_type_id": lt["id"],
+        }
+        total_days += days
+
+    total_hours = round(total_days * 8, 2)
+
+    return {
+        "leave_balance_hours": total_hours,
+        "balance_hours": total_hours,
+        "available_hours": total_hours,
+        "details": details,
+    }
 @api_router.put("/leave-requests/{lr_id}", response_model=LeaveRequestResponse)
 async def update_leave_request(lr_id: str, update: LeaveRequestUpdate, current_user: dict = Depends(require_manager)):
     lr = await db.leave_requests.find_one({"id": lr_id})
@@ -2644,116 +2769,454 @@ async def get_activity_logs(
 async def seed_demo_data(current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "super_admin":
         raise HTTPException(status_code=403, detail="Only super admin can seed data")
-    
-    if await db.departments.count_documents({}) > 0:
-        return {"message": "Data already seeded"}
-    
-    # Create work locations with 5-mile radius (8047 meters)
+
+    # Prevent duplicate huge seeds
+    existing_demo = await db.users.find_one({"email": "superadmin@test.com"})
+    if existing_demo:
+        return {
+            "message": "Demo data already seeded",
+            "accounts": [
+                {"email": "superadmin@test.com", "password": "Test123!"},
+                {"email": "hr@test.com", "password": "Test123!"},
+                {"email": "manager@test.com", "password": "Test123!"},
+                {"email": "employee@test.com", "password": "Test123!"},
+                {"email": "employee2@test.com", "password": "Test123!"},
+            ],
+        }
+
+    now = datetime.utcnow()
+    test_password_hash = get_password_hash("Test123!")
+
+    # ===== Work Locations =====
     work_locations = [
-        {"id": str(uuid.uuid4()), "name": "Main Office - San Francisco", "address": "123 Market Street, San Francisco, CA 94102", "latitude": 37.7749, "longitude": -122.4194, "radius": 8047, "is_active": True, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow()},
-        {"id": str(uuid.uuid4()), "name": "Remote Hub - New York", "address": "456 Broadway, New York, NY 10012", "latitude": 40.7128, "longitude": -74.0060, "radius": 8047, "is_active": True, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow()},
+        {
+            "id": str(uuid.uuid4()),
+            "name": "Main Office - San Francisco",
+            "address": "123 Market Street, San Francisco, CA 94102",
+            "latitude": 37.7749,
+            "longitude": -122.4194,
+            "radius": 8047,
+            "is_active": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "name": "Remote Hub - New York",
+            "address": "456 Broadway, New York, NY 10012",
+            "latitude": 40.7128,
+            "longitude": -74.0060,
+            "radius": 8047,
+            "is_active": True,
+            "created_at": now,
+            "updated_at": now,
+        },
     ]
     await db.work_locations.insert_many(work_locations)
-    
-    # Create departments
+
+    # ===== Departments =====
     departments = [
-        {"id": str(uuid.uuid4()), "name": "Engineering", "description": "Software Development Team", "budget": 500000, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow()},
-        {"id": str(uuid.uuid4()), "name": "Human Resources", "description": "HR Operations", "budget": 150000, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow()},
-        {"id": str(uuid.uuid4()), "name": "Marketing", "description": "Marketing & Communications", "budget": 200000, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow()},
-        {"id": str(uuid.uuid4()), "name": "Sales", "description": "Sales Team", "budget": 300000, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow()},
-        {"id": str(uuid.uuid4()), "name": "Finance", "description": "Finance & Accounting", "budget": 180000, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow()},
+        {
+            "id": str(uuid.uuid4()),
+            "name": "Engineering",
+            "description": "Software Development Team",
+            "budget": 500000,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "name": "Human Resources",
+            "description": "HR Operations",
+            "budget": 150000,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "name": "Marketing",
+            "description": "Marketing & Communications",
+            "budget": 200000,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "name": "Sales",
+            "description": "Sales Team",
+            "budget": 300000,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "name": "Finance",
+            "description": "Finance & Accounting",
+            "budget": 180000,
+            "created_at": now,
+            "updated_at": now,
+        },
     ]
     await db.departments.insert_many(departments)
-    
-    # Create leave types
+
+    engineering = departments[0]
+    hr_dept = departments[1]
+    marketing = departments[2]
+    sales = departments[3]
+    finance = departments[4]
+
+    # ===== Leave Types =====
     leave_types = [
-        {"id": str(uuid.uuid4()), "name": "Annual Leave", "description": "Paid vacation days", "days_per_year": 20, "is_paid": True, "requires_approval": True, "color": "#3B82F6", "created_at": datetime.utcnow()},
-        {"id": str(uuid.uuid4()), "name": "Sick Leave", "description": "Medical leave", "days_per_year": 10, "is_paid": True, "requires_approval": True, "color": "#EF4444", "created_at": datetime.utcnow()},
-        {"id": str(uuid.uuid4()), "name": "Personal Leave", "description": "Personal time off", "days_per_year": 5, "is_paid": True, "requires_approval": True, "color": "#8B5CF6", "created_at": datetime.utcnow()},
-        {"id": str(uuid.uuid4()), "name": "Unpaid Leave", "description": "Leave without pay", "days_per_year": 30, "is_paid": False, "requires_approval": True, "color": "#6B7280", "created_at": datetime.utcnow()},
+        {
+            "id": str(uuid.uuid4()),
+            "name": "Annual Leave",
+            "description": "Paid vacation days",
+            "days_per_year": 20,
+            "is_paid": True,
+            "requires_approval": True,
+            "color": "#3B82F6",
+            "created_at": now,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "name": "Sick Leave",
+            "description": "Medical leave",
+            "days_per_year": 10,
+            "is_paid": True,
+            "requires_approval": True,
+            "color": "#EF4444",
+            "created_at": now,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "name": "Personal Leave",
+            "description": "Personal time off",
+            "days_per_year": 5,
+            "is_paid": True,
+            "requires_approval": True,
+            "color": "#8B5CF6",
+            "created_at": now,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "name": "Unpaid Leave",
+            "description": "Leave without pay",
+            "days_per_year": 30,
+            "is_paid": False,
+            "requires_approval": True,
+            "color": "#6B7280",
+            "created_at": now,
+        },
     ]
     await db.leave_types.insert_many(leave_types)
-    
     leave_balance = {lt["id"]: lt["days_per_year"] for lt in leave_types}
-    
-    # Create training videos
+
+    # ===== Training Videos =====
     training_videos = [
-        {"id": str(uuid.uuid4()), "title": "Getting Started with WorkPulse HR", "description": "Learn the basics of navigating WorkPulse HR", "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "role": "all", "category": "Getting Started", "duration": "5 min", "order": 1, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow()},
-        {"id": str(uuid.uuid4()), "title": "Managing Employee Profiles", "description": "How to create and update employee information", "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "role": "hr_admin", "category": "HR Management", "duration": "8 min", "order": 2, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow()},
-        {"id": str(uuid.uuid4()), "title": "Approving Leave Requests", "description": "Learn how to review and approve time off requests", "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "role": "manager", "category": "Approvals", "duration": "4 min", "order": 3, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow()},
-        {"id": str(uuid.uuid4()), "title": "Clocking In & Out", "description": "How to use the attendance system", "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "role": "employee", "category": "Attendance", "duration": "3 min", "order": 4, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow()},
-        {"id": str(uuid.uuid4()), "title": "Requesting Time Off", "description": "How to submit leave requests", "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "role": "employee", "category": "Leave", "duration": "4 min", "order": 5, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow()},
-        {"id": str(uuid.uuid4()), "title": "Understanding Your Payslip", "description": "How to read and download your payslips", "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "role": "employee", "category": "Payroll", "duration": "5 min", "order": 6, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow()},
-        {"id": str(uuid.uuid4()), "title": "Running Payroll", "description": "Complete guide to processing payroll", "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "role": "hr_admin", "category": "Payroll", "duration": "10 min", "order": 7, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow()},
-        {"id": str(uuid.uuid4()), "title": "Setting Up Work Locations", "description": "Configure GPS-verified attendance locations", "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "role": "hr_admin", "category": "Settings", "duration": "6 min", "order": 8, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow()},
-        {"id": str(uuid.uuid4()), "title": "Exporting Reports", "description": "How to download and export HR data", "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "role": "hr_admin", "category": "Reports", "duration": "5 min", "order": 9, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow()},
+        {
+            "id": str(uuid.uuid4()),
+            "title": "Getting Started with WorkPulse HR",
+            "description": "Learn the basics of navigating WorkPulse HR",
+            "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "role": "all",
+            "category": "Getting Started",
+            "duration": "5 min",
+            "order": 1,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "title": "Managing Employee Profiles",
+            "description": "How to create and update employee information",
+            "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "role": "hr_admin",
+            "category": "HR Management",
+            "duration": "8 min",
+            "order": 2,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "title": "Clocking In & Out",
+            "description": "How to use the attendance system",
+            "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "role": "employee",
+            "category": "Attendance",
+            "duration": "3 min",
+            "order": 3,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "title": "Running Payroll",
+            "description": "Complete guide to processing payroll",
+            "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "role": "hr_admin",
+            "category": "Payroll",
+            "duration": "10 min",
+            "order": 4,
+            "created_at": now,
+            "updated_at": now,
+        },
     ]
     await db.training_videos.insert_many(training_videos)
-    
-    # Create demo employees
-    employees_data = [
-        {"employee_id": "EMP001", "first_name": "John", "last_name": "Smith", "email": "john.smith@company.com", "phone": "+1-555-0101", "job_title": "Senior Software Engineer", "department_id": departments[0]["id"], "employment_type": "Full-time", "start_date": "2022-03-15", "date_of_birth": "1988-07-20", "salary": 120000},
-        {"employee_id": "EMP002", "first_name": "Sarah", "last_name": "Johnson", "email": "sarah.johnson@company.com", "phone": "+1-555-0102", "job_title": "HR Manager", "department_id": departments[1]["id"], "employment_type": "Full-time", "start_date": "2021-01-10", "date_of_birth": "1985-03-12", "salary": 95000},
-        {"employee_id": "EMP003", "first_name": "Michael", "last_name": "Brown", "email": "michael.brown@company.com", "phone": "+1-555-0103", "job_title": "Marketing Director", "department_id": departments[2]["id"], "employment_type": "Full-time", "start_date": "2020-06-01", "date_of_birth": "1982-11-05", "salary": 110000},
-        {"employee_id": "EMP004", "first_name": "Emily", "last_name": "Davis", "email": "emily.davis@company.com", "phone": "+1-555-0104", "job_title": "Sales Representative", "department_id": departments[3]["id"], "employment_type": "Full-time", "start_date": "2023-02-20", "date_of_birth": "1990-08-25", "salary": 65000},
-        {"employee_id": "EMP005", "first_name": "David", "last_name": "Wilson", "email": "david.wilson@company.com", "phone": "+1-555-0105", "job_title": "Financial Analyst", "department_id": departments[4]["id"], "employment_type": "Full-time", "start_date": "2022-09-05", "date_of_birth": "1987-01-30", "salary": 85000},
-        {"employee_id": "EMP006", "first_name": "Jessica", "last_name": "Taylor", "email": "jessica.taylor@company.com", "phone": "+1-555-0106", "job_title": "Frontend Developer", "department_id": departments[0]["id"], "employment_type": "Full-time", "start_date": "2023-04-10", "date_of_birth": "1992-05-18", "salary": 95000},
-        {"employee_id": "EMP007", "first_name": "Robert", "last_name": "Anderson", "email": "robert.anderson@company.com", "phone": "+1-555-0107", "job_title": "Backend Developer", "department_id": departments[0]["id"], "employment_type": "Full-time", "start_date": "2022-11-15", "date_of_birth": "1989-12-03", "salary": 105000},
-        {"employee_id": "EMP008", "first_name": "Amanda", "last_name": "Martinez", "email": "amanda.martinez@company.com", "phone": "+1-555-0108", "job_title": "HR Specialist", "department_id": departments[1]["id"], "employment_type": "Full-time", "start_date": "2023-06-01", "date_of_birth": "1991-09-22", "salary": 60000},
-        {"employee_id": "EMP009", "first_name": "Christopher", "last_name": "Garcia", "email": "chris.garcia@company.com", "phone": "+1-555-0109", "job_title": "Content Manager", "department_id": departments[2]["id"], "employment_type": "Full-time", "start_date": "2022-07-20", "date_of_birth": "1986-04-15", "salary": 70000},
-        {"employee_id": "EMP010", "first_name": "Michelle", "last_name": "Lee", "email": "michelle.lee@company.com", "phone": "+1-555-0110", "job_title": "Account Executive", "department_id": departments[3]["id"], "employment_type": "Full-time", "start_date": "2023-01-15", "date_of_birth": "1993-02-28", "salary": 75000},
+
+    # ===== Test Users + Linked Employees =====
+    demo_people = [
+        {
+            "email": "superadmin@test.com",
+            "first_name": "Admin",
+            "last_name": "Super",
+            "role": "super_admin",
+            "department_id": hr_dept["id"],
+            "job_title": "Super Admin",
+            "salary": 120000,
+            "employee_code": "EMP-SA01",
+        },
+        {
+            "email": "hr@test.com",
+            "first_name": "Sarah",
+            "last_name": "HR",
+            "role": "hr_admin",
+            "department_id": hr_dept["id"],
+            "job_title": "HR Admin",
+            "salary": 95000,
+            "employee_code": "EMP-HR01",
+        },
+        {
+            "email": "manager@test.com",
+            "first_name": "Mike",
+            "last_name": "Manager",
+            "role": "manager",
+            "department_id": engineering["id"],
+            "job_title": "Engineering Manager",
+            "salary": 105000,
+            "employee_code": "EMP-MG01",
+        },
+        {
+            "email": "employee@test.com",
+            "first_name": "John",
+            "last_name": "Employee",
+            "role": "employee",
+            "department_id": engineering["id"],
+            "job_title": "Frontend Developer",
+            "salary": 75000,
+            "employee_code": "EMP-EM01",
+        },
+        {
+            "email": "employee2@test.com",
+            "first_name": "Mia",
+            "last_name": "Tester",
+            "role": "employee",
+            "department_id": sales["id"],
+            "job_title": "Sales Associate",
+            "salary": 68000,
+            "employee_code": "EMP-EM02",
+        },
+        {
+            "email": "john.smith@company.com",
+            "first_name": "John",
+            "last_name": "Smith",
+            "role": "employee",
+            "department_id": engineering["id"],
+            "job_title": "Senior Software Engineer",
+            "salary": 120000,
+            "employee_code": "EMP001",
+        },
+        {
+            "email": "sarah.johnson@company.com",
+            "first_name": "Sarah",
+            "last_name": "Johnson",
+            "role": "employee",
+            "department_id": hr_dept["id"],
+            "job_title": "HR Manager",
+            "salary": 95000,
+            "employee_code": "EMP002",
+        },
+        {
+            "email": "michael.brown@company.com",
+            "first_name": "Michael",
+            "last_name": "Brown",
+            "role": "employee",
+            "department_id": marketing["id"],
+            "job_title": "Marketing Director",
+            "salary": 110000,
+            "employee_code": "EMP003",
+        },
+        {
+            "email": "emily.davis@company.com",
+            "first_name": "Emily",
+            "last_name": "Davis",
+            "role": "employee",
+            "department_id": sales["id"],
+            "job_title": "Sales Representative",
+            "salary": 65000,
+            "employee_code": "EMP004",
+        },
+        {
+            "email": "david.wilson@company.com",
+            "first_name": "David",
+            "last_name": "Wilson",
+            "role": "employee",
+            "department_id": finance["id"],
+            "job_title": "Financial Analyst",
+            "salary": 85000,
+            "employee_code": "EMP005",
+        },
     ]
-    
+
+    created_users = []
     employees = []
-    for emp_data in employees_data:
-        emp = {
-            "id": str(uuid.uuid4()),
-            "user_id": None,
-            "employee_id": emp_data["employee_id"],
-            "first_name": emp_data["first_name"],
-            "last_name": emp_data["last_name"],
-            "email": emp_data["email"],
-            "phone": emp_data["phone"],
-            "job_title": emp_data["job_title"],
-            "department_id": emp_data["department_id"],
+
+    for idx, person in enumerate(demo_people):
+        user_id = str(uuid.uuid4())
+        employee_id = str(uuid.uuid4())
+
+        user_doc = {
+            "id": user_id,
+            "email": person["email"],
+            "password_hash": test_password_hash,
+            "first_name": person["first_name"],
+            "last_name": person["last_name"],
+            "role": person["role"],
+            "employee_id": employee_id,
+            "onboarding_completed": True,
+            "created_at": now,
+            "updated_at": now,
+        }
+        await db.users.insert_one(user_doc)
+
+        employee_doc = {
+            "id": employee_id,
+            "user_id": user_id,
+            "employee_id": person["employee_code"],
+            "first_name": person["first_name"],
+            "last_name": person["last_name"],
+            "email": person["email"],
+            "phone": f"+1-555-01{str(idx + 1).zfill(2)}",
+            "job_title": person["job_title"],
+            "department_id": person["department_id"],
             "manager_id": None,
             "work_location_id": work_locations[0]["id"],
             "work_location": "Office",
-            "employment_type": emp_data["employment_type"],
-            "start_date": emp_data["start_date"],
+            "employment_type": "Full-time",
+            "start_date": "2024-01-15",
             "status": "active",
-            "date_of_birth": emp_data["date_of_birth"],
-            "address": f"{100 + int(emp_data['employee_id'][-3:])} Main Street",
+            "date_of_birth": "1990-01-15",
+            "address": f"{100 + idx} Main Street",
             "city": "San Francisco",
             "state": "CA",
             "zip_code": "94102",
             "country": "USA",
-            "emergency_contact": {"name": "Emergency Contact", "relationship": "Spouse", "phone": "+1-555-9999"},
-            "bank_info": {"bank_name": "Chase Bank", "account_number": "****1234", "routing_number": "****5678"},
+            "emergency_contact": {
+                "name": "Emergency Contact",
+                "relationship": "Spouse",
+                "phone": "+1-555-9999",
+            },
+            "bank_info": {
+                "bank_name": "Chase Bank",
+                "account_number": "****1234",
+                "routing_number": "****5678",
+            },
             "tax_id": "***-**-1234",
-            "salary": emp_data["salary"],
+            "salary": person["salary"],
             "hourly_rate": None,
             "skills": ["Communication", "Teamwork"],
             "notes": None,
             "leave_balance": leave_balance.copy(),
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow()
+            "created_at": now,
+            "updated_at": now,
         }
-        employees.append(emp)
-    
-    await db.employees.insert_many(employees)
-    
-    # Create leave requests
+        await db.employees.insert_one(employee_doc)
+        employees.append(employee_doc)
+
+        created_users.append({
+            "email": person["email"],
+            "role": person["role"],
+            "password": "Test123!",
+        })
+
+    # ===== Leave Requests =====
     leave_requests = [
-        {"id": str(uuid.uuid4()), "employee_id": employees[0]["id"], "leave_type_id": leave_types[0]["id"], "start_date": "2025-07-15", "end_date": "2025-07-19", "days_count": 5, "reason": "Family vacation", "status": "pending", "half_day": False, "created_at": datetime.utcnow()},
-        {"id": str(uuid.uuid4()), "employee_id": employees[3]["id"], "leave_type_id": leave_types[1]["id"], "start_date": "2025-07-10", "end_date": "2025-07-11", "days_count": 2, "reason": "Not feeling well", "status": "approved", "half_day": False, "approved_by": "system", "approved_at": datetime.utcnow(), "created_at": datetime.utcnow()},
-        {"id": str(uuid.uuid4()), "employee_id": employees[5]["id"], "leave_type_id": leave_types[2]["id"], "start_date": "2025-07-20", "end_date": "2025-07-20", "days_count": 1, "reason": "Personal appointment", "status": "pending", "half_day": False, "created_at": datetime.utcnow()},
+        {
+            "id": str(uuid.uuid4()),
+            "employee_id": employees[3]["id"],
+            "leave_type_id": leave_types[0]["id"],
+            "start_date": (now + timedelta(days=7)).strftime("%Y-%m-%d"),
+            "end_date": (now + timedelta(days=9)).strftime("%Y-%m-%d"),
+            "days_count": 3,
+            "reason": "Family vacation",
+            "status": "pending",
+            "half_day": False,
+            "created_at": now,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "employee_id": employees[4]["id"],
+            "leave_type_id": leave_types[1]["id"],
+            "start_date": (now - timedelta(days=6)).strftime("%Y-%m-%d"),
+            "end_date": (now - timedelta(days=5)).strftime("%Y-%m-%d"),
+            "days_count": 2,
+            "reason": "Not feeling well",
+            "status": "approved",
+            "half_day": False,
+            "approved_by": employees[1]["user_id"],
+            "approved_at": now,
+            "created_at": now,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "employee_id": employees[9]["id"],
+            "leave_type_id": leave_types[2]["id"],
+            "start_date": (now + timedelta(days=12)).strftime("%Y-%m-%d"),
+            "end_date": (now + timedelta(days=12)).strftime("%Y-%m-%d"),
+            "days_count": 1,
+            "reason": "Personal appointment",
+            "status": "rejected",
+            "half_day": False,
+            "approved_by": employees[2]["user_id"],
+            "approved_at": now,
+            "manager_comment": "Busy sales day",
+            "created_at": now,
+        },
     ]
     await db.leave_requests.insert_many(leave_requests)
-    
-    # Create attendance records
-    today = datetime.utcnow()
+
+    # ===== Time Off Requests =====
+    time_off_requests = [
+        {
+            "id": str(uuid.uuid4()),
+            "employee_id": employees[3]["id"],
+            "start_date": (now + timedelta(days=15)).strftime("%Y-%m-%d"),
+            "end_date": (now + timedelta(days=16)).strftime("%Y-%m-%d"),
+            "note": "Weekend trip extension",
+            "status": "pending",
+            "days_count": 2,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "employee_id": employees[4]["id"],
+            "start_date": (now + timedelta(days=20)).strftime("%Y-%m-%d"),
+            "end_date": (now + timedelta(days=20)).strftime("%Y-%m-%d"),
+            "note": "Family event",
+            "status": "approved",
+            "days_count": 1,
+            "review_note": "Approved",
+            "created_at": now,
+            "updated_at": now,
+        },
+    ]
+    await db.time_off_requests.insert_many(time_off_requests)
+
+    # ===== Attendance Records =====
     attendance_records = []
+    today = datetime.utcnow()
+
     for i, emp in enumerate(employees[:5]):
         clock_in = today.replace(hour=8, minute=30 + i * 5, second=0, microsecond=0)
         clock_out = today.replace(hour=17, minute=30, second=0, microsecond=0)
@@ -2765,23 +3228,115 @@ async def seed_demo_data(current_user: dict = Depends(get_current_user)):
             "clock_out": clock_out,
             "clock_in_location": {"latitude": 37.7749, "longitude": -122.4194},
             "clock_out_location": {"latitude": 37.7749, "longitude": -122.4194},
+            "clock_in_local": clock_in.isoformat(),
+            "clock_out_local": clock_out.isoformat(),
+            "timezone": "America/Los_Angeles",
             "total_hours": round((clock_out - clock_in).total_seconds() / 3600, 2),
             "status": "present" if i < 3 else "late",
             "notes": None,
-            "created_at": datetime.utcnow()
+            "created_at": now,
         })
+
     await db.attendance.insert_many(attendance_records)
-    
-    # Create payroll records
+
+    # ===== Shifts =====
+    shifts = []
+
+    # completed shifts
+    for i, emp in enumerate(employees[:3]):
+        shift_start = today.replace(hour=8, minute=15 + i * 5, second=0, microsecond=0)
+        shift_end = today.replace(hour=17, minute=0, second=0, microsecond=0)
+
+        shifts.append({
+            "id": str(uuid.uuid4()),
+            "employee_id": emp["id"],
+            "date": today.strftime("%Y-%m-%d"),
+            "status": "completed",
+            "clock_in": {
+                "timestamp": shift_start,
+                "local_time": shift_start.isoformat(),
+                "timezone": "America/Los_Angeles",
+                "location": {"latitude": 37.7749, "longitude": -122.4194},
+            },
+            "clock_out": {
+                "timestamp": shift_end,
+                "local_time": shift_end.isoformat(),
+                "timezone": "America/Los_Angeles",
+                "location": {"latitude": 37.7749, "longitude": -122.4194},
+            },
+            "breaks": [],
+            "current_break": None,
+            "total_break_seconds": 0,
+            "total_work_hours": round((shift_end - shift_start).total_seconds() / 3600, 2),
+            "created_at": now,
+            "updated_at": now,
+        })
+
+    # one active working shift
+    active_shift_start = today.replace(hour=9, minute=0, second=0, microsecond=0)
+    shifts.append({
+        "id": str(uuid.uuid4()),
+        "employee_id": employees[5]["id"],
+        "date": today.strftime("%Y-%m-%d"),
+        "status": "working",
+        "clock_in": {
+            "timestamp": active_shift_start,
+            "local_time": active_shift_start.isoformat(),
+            "timezone": "America/Los_Angeles",
+            "location": {"latitude": 37.7749, "longitude": -122.4194},
+        },
+        "breaks": [],
+        "current_break": None,
+        "total_break_seconds": 0,
+        "created_at": now,
+        "updated_at": now,
+    })
+
+    # one employee on break
+    break_shift_start = today.replace(hour=8, minute=0, second=0, microsecond=0)
+    break_start = today.replace(hour=12, minute=15, second=0, microsecond=0)
+    shifts.append({
+        "id": str(uuid.uuid4()),
+        "employee_id": employees[6]["id"],
+        "date": today.strftime("%Y-%m-%d"),
+        "status": "on_break",
+        "clock_in": {
+            "timestamp": break_shift_start,
+            "local_time": break_shift_start.isoformat(),
+            "timezone": "America/Los_Angeles",
+            "location": {"latitude": 37.7749, "longitude": -122.4194},
+        },
+        "breaks": [],
+        "current_break": {
+            "id": str(uuid.uuid4()),
+            "start": break_start.isoformat(),
+            "start_local": break_start.isoformat(),
+            "start_location": {"latitude": 37.7749, "longitude": -122.4194},
+        },
+        "total_break_seconds": 0,
+        "created_at": now,
+        "updated_at": now,
+    })
+
+    await db.shifts.insert_many(shifts)
+
+    # ===== Payroll + Paystubs =====
     payroll_records = []
+    paystub_records = []
+
     for emp in employees[:5]:
-        basic = emp["salary"] / 12
+        basic = round(emp["salary"] / 12, 2)
         overtime_pay = 0
         bonus = 500
-        tax = basic * 0.22
-        benefits = basic * 0.05
+        tax = round(basic * 0.22, 2)
+        benefits = round(basic * 0.05, 2)
+        gross_pay = round(basic + overtime_pay + bonus, 2)
+        net_pay = round(gross_pay - 100 - tax - benefits, 2)
+
+        payroll_id = str(uuid.uuid4())
+
         payroll_records.append({
-            "id": str(uuid.uuid4()),
+            "id": payroll_id,
             "employee_id": emp["id"],
             "pay_period_start": "2025-06-01",
             "pay_period_end": "2025-06-30",
@@ -2790,95 +3345,203 @@ async def seed_demo_data(current_user: dict = Depends(get_current_user)):
             "overtime_rate": 1.5,
             "overtime_pay": overtime_pay,
             "bonus": bonus,
-            "gross_pay": basic + overtime_pay + bonus,
+            "gross_pay": gross_pay,
             "deductions": 100,
             "tax": tax,
             "benefits_deduction": benefits,
-            "net_pay": basic + overtime_pay + bonus - 100 - tax - benefits,
+            "net_pay": net_pay,
             "status": "paid",
             "notes": "June 2025 Payroll",
-            "created_at": datetime.utcnow()
+            "created_at": now,
         })
+
+        pdf_bytes = make_demo_paystub_pdf(
+            employee_name=f"{emp['first_name']} {emp['last_name']}",
+            employee_code=emp["employee_id"],
+            pay_period_start="2025-06-01",
+            pay_period_end="2025-06-30",
+            pay_date="2025-07-01",
+            gross_pay=gross_pay,
+            net_pay=net_pay,
+        )
+
+        paystub_records.append({
+            "id": str(uuid.uuid4()),
+            "employee_id": emp["id"],
+            "payroll_id": payroll_id,
+            "pay_period_start": "2025-06-01",
+            "pay_period_end": "2025-06-30",
+            "pay_date": "2025-07-01",
+            "gross_pay": gross_pay,
+            "net_pay": net_pay,
+            "pdf_filename": f"{emp['employee_id']}_2025-07-01.pdf",
+            "pdf_content": pdf_bytes,
+            "created_at": now,
+        })
+
     await db.payroll.insert_many(payroll_records)
-    
-    # Create announcements
+    await db.paystubs.insert_many(paystub_records)
+
+    # ===== Announcements =====
     announcements = [
-        {"id": str(uuid.uuid4()), "title": "Welcome to Emplora!", "content": "We are excited to launch our new HR management system. Please explore all the features and let us know if you have any feedback.", "type": "general", "priority": "high", "author_id": current_user["id"], "is_active": True, "created_at": datetime.utcnow()},
-        {"id": str(uuid.uuid4()), "title": "Q3 Company Meeting", "content": "Please join us for our quarterly company meeting on July 25th at 2 PM in the main conference room.", "type": "general", "priority": "normal", "author_id": current_user["id"], "is_active": True, "created_at": datetime.utcnow()},
-        {"id": str(uuid.uuid4()), "title": "New Health Benefits Package", "content": "Starting August 1st, we will be offering enhanced health benefits. Check your email for more details.", "type": "hr_notice", "priority": "high", "author_id": current_user["id"], "is_active": True, "created_at": datetime.utcnow()},
+        {
+            "id": str(uuid.uuid4()),
+            "title": "Welcome to Emplora!",
+            "content": "We are excited to launch our new HR management system. Please explore all the features and let us know if you have any feedback.",
+            "type": "general",
+            "priority": "high",
+            "author_id": current_user["id"],
+            "is_active": True,
+            "created_at": now,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "title": "Q3 Company Meeting",
+            "content": "Please join us for our quarterly company meeting on July 25th at 2 PM in the main conference room.",
+            "type": "general",
+            "priority": "normal",
+            "author_id": current_user["id"],
+            "is_active": True,
+            "created_at": now,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "title": "New Health Benefits Package",
+            "content": "Starting August 1st, we will be offering enhanced health benefits. Check your email for more details.",
+            "type": "hr_notice",
+            "priority": "high",
+            "author_id": current_user["id"],
+            "is_active": True,
+            "created_at": now,
+        },
     ]
     await db.announcements.insert_many(announcements)
-    
-    return {"message": "Demo data seeded successfully", "employees_created": len(employees)}
 
-# ===== Seed Test Users Route =====
+    # ===== Notifications =====
+    await db.notifications.insert_one({
+        "id": str(uuid.uuid4()),
+        "type": "info",
+        "title": "Demo data ready",
+        "message": "Seeded demo users, employees, leave requests, attendance, payroll, and paystubs.",
+        "target_role": "hr_admin",
+        "read": False,
+        "created_at": now,
+    })
+
+    return {
+        "message": "Demo data seeded successfully",
+        "employees_created": len(employees),
+        "test_accounts": created_users,
+    }
+
+
 @api_router.post("/seed-test-users")
 async def seed_test_users():
     """Seed test users for all roles - can be called without auth"""
-    test_password = get_password_hash("Test123!")
+    existing = await db.users.find_one({"email": "superadmin@test.com"})
+    if existing:
+        return {
+            "message": "Test users already seeded",
+            "users": [
+                {"email": "employee@test.com", "password": "Test123!"},
+                {"email": "hr@test.com", "password": "Test123!"},
+                {"email": "manager@test.com", "password": "Test123!"},
+                {"email": "superadmin@test.com", "password": "Test123!"},
+            ],
+        }
+
+    # create minimal super admin first so you can log in and run /seed-data
     now = datetime.utcnow()
-    
-    # Get or create departments for test users
+    test_password = get_password_hash("Test123!")
+
+    # Get or create departments
     hr_dept = await db.departments.find_one({"name": "Human Resources"})
     eng_dept = await db.departments.find_one({"name": "Engineering"})
-    
+
     if not hr_dept:
-        hr_dept = {"id": str(uuid.uuid4()), "name": "Human Resources", "created_at": now}
+        hr_dept = {
+            "id": str(uuid.uuid4()),
+            "name": "Human Resources",
+            "description": "HR Operations",
+            "budget": 150000,
+            "created_at": now,
+            "updated_at": now,
+        }
         await db.departments.insert_one(hr_dept)
+
     if not eng_dept:
-        eng_dept = {"id": str(uuid.uuid4()), "name": "Engineering", "created_at": now}
+        eng_dept = {
+            "id": str(uuid.uuid4()),
+            "name": "Engineering",
+            "description": "Software Development Team",
+            "budget": 500000,
+            "created_at": now,
+            "updated_at": now,
+        }
         await db.departments.insert_one(eng_dept)
-    
+
     # Get or create a work location
     work_loc = await db.work_locations.find_one({})
     if not work_loc:
-        work_loc = {"id": str(uuid.uuid4()), "name": "Main Office", "latitude": 37.7749, "longitude": -122.4194, "radius": 8047, "is_active": True, "created_at": now}
+        work_loc = {
+            "id": str(uuid.uuid4()),
+            "name": "Main Office",
+            "address": "123 Market Street, San Francisco, CA 94102",
+            "latitude": 37.7749,
+            "longitude": -122.4194,
+            "radius": 8047,
+            "is_active": True,
+            "created_at": now,
+            "updated_at": now,
+        }
         await db.work_locations.insert_one(work_loc)
-    
+
     test_users = [
         {
             "email": "employee@test.com",
             "first_name": "John",
             "last_name": "Employee",
             "role": "employee",
-            "department": eng_dept
+            "department": eng_dept,
         },
         {
             "email": "hr@test.com",
             "first_name": "Sarah",
             "last_name": "HR",
             "role": "hr_admin",
-            "department": hr_dept
+            "department": hr_dept,
         },
         {
             "email": "manager@test.com",
             "first_name": "Mike",
             "last_name": "Manager",
             "role": "manager",
-            "department": eng_dept
+            "department": eng_dept,
         },
         {
             "email": "superadmin@test.com",
             "first_name": "Admin",
             "last_name": "Super",
             "role": "super_admin",
-            "department": hr_dept
-        }
+            "department": hr_dept,
+        },
     ]
-    
+
     created_users = []
     for user_data in test_users:
-        # Check if user already exists
-        existing = await db.users.find_one({"email": user_data["email"]})
-        if existing:
-            created_users.append({"email": user_data["email"], "status": "already exists"})
+        existing_user = await db.users.find_one({"email": user_data["email"]})
+        if existing_user:
+            created_users.append({
+                "email": user_data["email"],
+                "status": "already exists",
+                "password": "Test123!",
+            })
             continue
-        
+
         user_id = str(uuid.uuid4())
         employee_id = str(uuid.uuid4())
         emp_code = f"EMP-{user_data['first_name'][:3].upper()}{str(uuid.uuid4())[:4].upper()}"
-        
-        # Create user
+
         user = {
             "id": user_id,
             "email": user_data["email"],
@@ -2889,11 +3552,10 @@ async def seed_test_users():
             "employee_id": employee_id,
             "onboarding_completed": True,
             "created_at": now,
-            "updated_at": now
+            "updated_at": now,
         }
         await db.users.insert_one(user)
-        
-        # Create employee profile
+
         employee = {
             "id": employee_id,
             "user_id": user_id,
@@ -2904,18 +3566,24 @@ async def seed_test_users():
             "phone": "555-0100",
             "department_id": user_data["department"]["id"],
             "job_title": f"{user_data['role'].replace('_', ' ').title()}",
-            "employment_type": "full_time",
+            "employment_type": "Full-time",
             "status": "active",
             "start_date": "2024-01-15",
             "work_location_id": work_loc["id"],
+            "work_location": "Office",
             "salary": 75000 if user_data["role"] == "employee" else 95000,
+            "leave_balance": {},
             "created_at": now,
-            "updated_at": now
+            "updated_at": now,
         }
         await db.employees.insert_one(employee)
-        
-        created_users.append({"email": user_data["email"], "status": "created", "password": "Test123!"})
-    
+
+        created_users.append({
+            "email": user_data["email"],
+            "status": "created",
+            "password": "Test123!",
+        })
+
     return {"message": "Test users seeded", "users": created_users}
 
 # ===== Notifications Routes =====
