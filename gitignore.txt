@@ -1,0 +1,68 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# ===========================================
+# SENSITIVE FILES - NEVER COMMIT THESE!
+# ===========================================
+
+# Android Keystore files (CRITICAL - keep private!)
+*.keystore
+*.jks
+android/app/*.keystore
+android/app/*.jks
+
+# Credentials and secrets
+credentials.json
+google-services.json
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.pem
+
+# Environment files with secrets
+.env.local
+.env*.local
+.env.production
+
+# ===========================================
+# Dependencies
+# ===========================================
+node_modules/
+
+# ===========================================
+# Expo / React Native
+# ===========================================
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+.kotlin/
+*.orig.*
+
+# Metro
+.metro-health-check*
+
+# ===========================================
+# Build & Debug
+# ===========================================
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+*.tsbuildinfo
+build/
+*.log
+
+# ===========================================
+# IDE & System
+# ===========================================
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ===========================================
+# App Example (template files)
+# ===========================================
+app-example
