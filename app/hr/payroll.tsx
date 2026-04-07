@@ -11,14 +11,19 @@ import {
   Modal,
   TextInput,
   ScrollView,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import * as XLSX from 'xlsx';
 
 const RAW_API_URL =
+  process.env.EXPO_PUBLIC_BACKEND_URL ||
   Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL ||
   'https://workpulse-hr.onrender.com';
 
@@ -35,6 +40,9 @@ interface Employee {
   hourly_rate?: number | null;
   salary?: number | null;
   employment_type?: string;
+  leave_balance_hours?: number | null;
+  vacation_balance_hours?: number | null;
+  sick_balance_hours?: number | null;
 }
 
 interface AttendanceRecord {
@@ -62,6 +70,8 @@ interface PayrollPreview {
   benefitsDeduction: number;
   grossPay: number;
   netPay: number;
+  vacationBalanceHours: number;
+  sickBalanceHours: number;
 }
 
 type DraftMap = Record<
@@ -82,6 +92,7 @@ export default function HRPayrollScreen() {
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const [periodStart, setPeriodStart] = useState(getFirstDayOfCurrentMonth());
   const [periodEnd, setPeriodEnd] = useState(getToday());
@@ -100,8 +111,15 @@ export default function HRPayrollScreen() {
     return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0];
   }
 
+  const getToken = async () => {
+    const authToken = await AsyncStorage.getItem('auth_token');
+    if (authToken) return authToken;
+    return await AsyncStorage.getItem('token');
+  };
+
   const apiRequest = async (endpoint: string, method: string = 'GET', body?: any) => {
-    const token = await AsyncStorage.getItem('auth_token');
+    const token = await getToken();
+
     const response = await fetch(`${API_URL}${endpoint}`, {
       method,
       headers: {
@@ -133,8 +151,15 @@ export default function HRPayrollScreen() {
     return data;
   };
 
+  const isValidDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
+  const formatMoney = (value: number) => `$${value.toFixed(2)}`;
+
   const loadData = async () => {
     try {
+      if (!isValidDate(periodStart) || !isValidDate(periodEnd)) {
+        throw new Error('Please use YYYY-MM-DD for the pay period dates.');
+      }
+
       const [employeeData, attendanceData] = await Promise.all([
         apiRequest('/api/employees'),
         apiRequest(`/api/attendance?start_date=${periodStart}&end_date=${periodEnd}`),
@@ -176,7 +201,7 @@ export default function HRPayrollScreen() {
       const totalHours = rows.reduce((sum, row) => sum + Number(row.total_hours || 0), 0);
 
       const hourlyRate = Number(emp.hourly_rate || 0);
-      const monthlySalary = Number(emp.salary || 0);
+      const salaryValue = Number(emp.salary || 0);
 
       let baseRate = 0;
       let basicSalary = 0;
@@ -184,8 +209,8 @@ export default function HRPayrollScreen() {
       if (hourlyRate > 0) {
         baseRate = hourlyRate;
         basicSalary = totalHours * hourlyRate;
-      } else if (monthlySalary > 0) {
-        baseRate = monthlySalary / 160;
+      } else if (salaryValue > 0) {
+        baseRate = salaryValue / 160;
         basicSalary = totalHours * baseRate;
       }
 
@@ -214,7 +239,7 @@ export default function HRPayrollScreen() {
         baseRate: Number(baseRate.toFixed(2)),
         basicSalary: Number(basicSalary.toFixed(2)),
         overtimeHours: Number(overtimeHours.toFixed(2)),
-        overtimeRate,
+        overtimeRate: Number(overtimeRate.toFixed(2)),
         overtimePay: Number(overtimePay.toFixed(2)),
         bonus: Number(bonus.toFixed(2)),
         deductions: Number(deductions.toFixed(2)),
@@ -222,6 +247,10 @@ export default function HRPayrollScreen() {
         benefitsDeduction: Number(benefitsDeduction.toFixed(2)),
         grossPay: Number(grossPay.toFixed(2)),
         netPay: Number(netPay.toFixed(2)),
+        vacationBalanceHours: Number(
+          emp.vacation_balance_hours ?? emp.leave_balance_hours ?? 0
+        ),
+        sickBalanceHours: Number(emp.sick_balance_hours ?? 0),
       } as PayrollPreview;
     });
   }, [employees, attendanceByEmployee, drafts]);
@@ -248,16 +277,19 @@ export default function HRPayrollScreen() {
     field: keyof DraftMap[string],
     value: string
   ) => {
+    const sanitized = value.replace(/[^0-9.]/g, '');
+
     setDrafts((prev) => ({
       ...prev,
       [employeeId]: {
-        bonus: prev[employeeId]?.bonus ?? '0',
-        deductions: prev[employeeId]?.deductions ?? '0',
-        tax: prev[employeeId]?.tax ?? '0',
-        benefits: prev[employeeId]?.benefits ?? '0',
-        overtimeRate: prev[employeeId]?.overtimeRate ?? '1.5',
-        ...prev[employeeId],
-        [field]: value,
+        ...(prev[employeeId] || {
+          bonus: '0',
+          deductions: '0',
+          tax: '0',
+          benefits: '0',
+          overtimeRate: '1.5',
+        }),
+        [field]: sanitized,
       },
     }));
   };
@@ -269,6 +301,11 @@ export default function HRPayrollScreen() {
 
   const handleCreatePayroll = async () => {
     if (!selectedEmployee || !selectedPreview) return;
+
+    if (!isValidDate(periodStart) || !isValidDate(periodEnd)) {
+      Alert.alert('Invalid Period', 'Please use YYYY-MM-DD for the pay period dates.');
+      return;
+    }
 
     if (periodEnd < periodStart) {
       Alert.alert('Invalid Period', 'Pay period end must be after pay period start.');
@@ -301,6 +338,111 @@ export default function HRPayrollScreen() {
     }
   };
 
+  const handleExportExcel = async () => {
+    if (!isValidDate(periodStart) || !isValidDate(periodEnd)) {
+      Alert.alert('Invalid Period', 'Please use YYYY-MM-DD for the pay period dates.');
+      return;
+    }
+
+    if (payrollRows.length === 0) {
+      Alert.alert('Nothing to Export', 'There is no payroll data to export yet.');
+      return;
+    }
+
+    try {
+      setExporting(true);
+
+      const exportRows = payrollRows.map((item) => ({
+        employee_id: item.employee.employee_id,
+        employee_name: `${item.employee.first_name} ${item.employee.last_name}`.trim(),
+        email: item.employee.email || '',
+        department: item.employee.department_name || '',
+        job_title: item.employee.job_title || '',
+        employment_type: item.employee.employment_type || '',
+        period_start: periodStart,
+        period_end: periodEnd,
+        total_hours: item.hoursWorked,
+        base_rate: item.baseRate,
+        basic_pay: item.basicSalary,
+        overtime_hours: item.overtimeHours,
+        overtime_rate: item.overtimeRate,
+        overtime_pay: item.overtimePay,
+        bonus: item.bonus,
+        deductions: item.deductions,
+        tax: item.tax,
+        benefits_deduction: item.benefitsDeduction,
+        gross_pay: item.grossPay,
+        net_pay: item.netPay,
+        vacation_balance_hours: item.vacationBalanceHours,
+        sick_balance_hours: item.sickBalanceHours,
+      }));
+
+      const workbook = XLSX.utils.book_new();
+      const worksheet = XLSX.utils.json_to_sheet(exportRows);
+
+      const columnWidths = [
+        { wch: 14 },
+        { wch: 22 },
+        { wch: 28 },
+        { wch: 16 },
+        { wch: 20 },
+        { wch: 16 },
+        { wch: 14 },
+        { wch: 14 },
+        { wch: 12 },
+        { wch: 12 },
+        { wch: 12 },
+        { wch: 14 },
+        { wch: 14 },
+        { wch: 12 },
+        { wch: 12 },
+        { wch: 12 },
+        { wch: 10 },
+        { wch: 18 },
+        { wch: 12 },
+        { wch: 12 },
+        { wch: 18 },
+        { wch: 16 },
+      ];
+      worksheet['!cols'] = columnWidths;
+
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Payroll Export');
+
+      const wbout = XLSX.write(workbook, {
+        type: 'base64',
+        bookType: 'xlsx',
+      });
+
+      const fileName = `payroll-export-${periodStart}-to-${periodEnd}.xlsx`;
+      const fileUri = `${FileSystem.cacheDirectory}${fileName}`;
+
+      await FileSystem.writeAsStringAsync(fileUri, wbout, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      const canShare = await Sharing.isAvailableAsync();
+      if (!canShare) {
+        Alert.alert('Exported', `Excel file saved to:\n${fileUri}`);
+        return;
+      }
+
+      await Sharing.shareAsync(fileUri, {
+        mimeType:
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        dialogTitle: 'Export Payroll Excel',
+        UTI:
+          Platform.OS === 'ios'
+            ? 'org.openxmlformats.spreadsheetml.sheet'
+            : undefined,
+      });
+    } catch (error: any) {
+      console.log('Excel export error:', error);
+      Alert.alert('Export Failed', error.message || 'Failed to export Excel file');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const renderPayrollRow = ({ item }: { item: PayrollPreview }) => (
     <TouchableOpacity
       style={styles.card}
@@ -308,7 +450,7 @@ export default function HRPayrollScreen() {
       onPress={() => openPayrollEditor(item.employee)}
     >
       <View style={styles.cardTop}>
-        <View>
+        <View style={styles.cardTextWrap}>
           <Text style={styles.name}>
             {item.employee.first_name} {item.employee.last_name}
           </Text>
@@ -316,11 +458,14 @@ export default function HRPayrollScreen() {
           {!!item.employee.job_title && (
             <Text style={styles.subText}>{item.employee.job_title}</Text>
           )}
+          {!!item.employee.department_name && (
+            <Text style={styles.subText}>{item.employee.department_name}</Text>
+          )}
         </View>
 
         <View style={styles.netPill}>
           <Text style={styles.netPillLabel}>Net</Text>
-          <Text style={styles.netPillValue}>${item.netPay.toFixed(2)}</Text>
+          <Text style={styles.netPillValue}>{formatMoney(item.netPay)}</Text>
         </View>
       </View>
 
@@ -331,13 +476,30 @@ export default function HRPayrollScreen() {
         </View>
 
         <View style={styles.statBox}>
-          <Text style={styles.statValue}>${item.baseRate.toFixed(2)}</Text>
+          <Text style={styles.statValue}>{formatMoney(item.baseRate)}</Text>
           <Text style={styles.statLabel}>Rate</Text>
         </View>
 
         <View style={styles.statBox}>
-          <Text style={styles.statValue}>${item.grossPay.toFixed(2)}</Text>
+          <Text style={styles.statValue}>{formatMoney(item.grossPay)}</Text>
           <Text style={styles.statLabel}>Gross</Text>
+        </View>
+      </View>
+
+      <View style={styles.statsRow}>
+        <View style={styles.statBox}>
+          <Text style={styles.statValue}>{item.vacationBalanceHours.toFixed(1)}</Text>
+          <Text style={styles.statLabel}>Vacation</Text>
+        </View>
+
+        <View style={styles.statBox}>
+          <Text style={styles.statValue}>{item.sickBalanceHours.toFixed(1)}</Text>
+          <Text style={styles.statLabel}>Sick</Text>
+        </View>
+
+        <View style={styles.statBox}>
+          <Text style={styles.statValue}>{item.overtimeHours.toFixed(2)}</Text>
+          <Text style={styles.statLabel}>OT Hours</Text>
         </View>
       </View>
 
@@ -370,7 +532,10 @@ export default function HRPayrollScreen() {
 
         <Text style={styles.headerTitle}>Payroll</Text>
 
-        <TouchableOpacity onPress={() => router.push('/hr/paystubs')} style={styles.headerBtn}>
+        <TouchableOpacity
+          onPress={() => router.push('/hr/paystubs')}
+          style={styles.headerBtn}
+        >
           <Ionicons name="document-text-outline" size={22} color="#1E293B" />
         </TouchableOpacity>
       </View>
@@ -384,6 +549,7 @@ export default function HRPayrollScreen() {
             style={styles.input}
             placeholder="YYYY-MM-DD"
             placeholderTextColor="#94A3B8"
+            autoCapitalize="none"
           />
         </View>
 
@@ -395,8 +561,24 @@ export default function HRPayrollScreen() {
             style={styles.input}
             placeholder="YYYY-MM-DD"
             placeholderTextColor="#94A3B8"
+            autoCapitalize="none"
           />
         </View>
+
+        <TouchableOpacity
+          style={[styles.exportButton, exporting && styles.disabledButton]}
+          onPress={handleExportExcel}
+          disabled={exporting}
+        >
+          {exporting ? (
+            <ActivityIndicator color="#FFFFFF" />
+          ) : (
+            <>
+              <Ionicons name="download-outline" size={18} color="#FFFFFF" />
+              <Text style={styles.exportButtonText}>Export Excel</Text>
+            </>
+          )}
+        </TouchableOpacity>
       </View>
 
       {payrollRows.length === 0 ? (
@@ -447,12 +629,29 @@ export default function HRPayrollScreen() {
                 </Text>
 
                 <View style={styles.summaryCard}>
-                  <SummaryRow label="Hours Worked" value={selectedPreview.hoursWorked.toFixed(2)} />
-                  <SummaryRow label="Base Rate" value={`$${selectedPreview.baseRate.toFixed(2)}`} />
-                  <SummaryRow label="Basic Pay" value={`$${selectedPreview.basicSalary.toFixed(2)}`} />
+                  <SummaryRow
+                    label="Hours Worked"
+                    value={selectedPreview.hoursWorked.toFixed(2)}
+                  />
+                  <SummaryRow
+                    label="Base Rate"
+                    value={formatMoney(selectedPreview.baseRate)}
+                  />
+                  <SummaryRow
+                    label="Basic Pay"
+                    value={formatMoney(selectedPreview.basicSalary)}
+                  />
                   <SummaryRow
                     label="Overtime Hours"
                     value={selectedPreview.overtimeHours.toFixed(2)}
+                  />
+                  <SummaryRow
+                    label="Vacation Balance"
+                    value={`${selectedPreview.vacationBalanceHours.toFixed(1)}h`}
+                  />
+                  <SummaryRow
+                    label="Sick Balance"
+                    value={`${selectedPreview.sickBalanceHours.toFixed(1)}h`}
                   />
                 </View>
 
@@ -489,17 +688,17 @@ export default function HRPayrollScreen() {
                 <View style={styles.totalCard}>
                   <SummaryRow
                     label="Overtime Pay"
-                    value={`$${selectedPreview.overtimePay.toFixed(2)}`}
+                    value={formatMoney(selectedPreview.overtimePay)}
                     bold
                   />
                   <SummaryRow
                     label="Gross Pay"
-                    value={`$${selectedPreview.grossPay.toFixed(2)}`}
+                    value={formatMoney(selectedPreview.grossPay)}
                     bold
                   />
                   <SummaryRow
                     label="Net Pay"
-                    value={`$${selectedPreview.netPay.toFixed(2)}`}
+                    value={formatMoney(selectedPreview.netPay)}
                     bold
                     large
                   />
@@ -637,6 +836,21 @@ const styles = StyleSheet.create({
     color: '#1E293B',
     backgroundColor: '#F8FAFC',
   },
+  exportButton: {
+    marginTop: 2,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: '#059669',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  exportButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+  },
   listContent: {
     paddingHorizontal: 16,
     paddingBottom: 28,
@@ -656,6 +870,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: 12,
+  },
+  cardTextWrap: {
+    flex: 1,
+    paddingRight: 8,
   },
   name: {
     fontSize: 17,
@@ -707,6 +925,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#64748B',
     marginTop: 4,
+    textAlign: 'center',
   },
   editButton: {
     marginTop: 14,
@@ -796,10 +1015,13 @@ const styles = StyleSheet.create({
   summaryLabel: {
     fontSize: 14,
     color: '#64748B',
+    flex: 1,
   },
   summaryValue: {
     fontSize: 14,
     color: '#1E293B',
+    textAlign: 'right',
+    flexShrink: 1,
   },
   summaryLabelBold: {
     fontWeight: '700',

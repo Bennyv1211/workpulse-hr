@@ -15,6 +15,7 @@ import Constants from 'expo-constants';
 import { useAuth } from '../../src/context/AuthContext';
 
 const RAW_API_URL =
+  process.env.EXPO_PUBLIC_BACKEND_URL ||
   Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL ||
   'https://workpulse-hr.onrender.com';
 

@@ -14,20 +14,27 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import * as Sharing from 'expo-sharing';
+import * as FileSystemLegacy from 'expo-file-system/legacy';
 
-const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 
-  Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL || 
+const RAW_API_URL =
+  process.env.EXPO_PUBLIC_BACKEND_URL ||
+  Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL ||
   'https://workpulse-hr.onrender.com';
+
+const API_URL = RAW_API_URL.replace(/\/+$/, '');
 
 interface Paystub {
   id: string;
   pay_period_start: string;
   pay_period_end: string;
-  pay_date: string;
+  pay_date?: string;
   gross_pay: number;
   net_pay: number;
-  pdf_filename: string;
+  pdf_filename?: string;
+  file_name?: string;
   pdf_url?: string;
+  pdf_base64?: string;
 }
 
 export default function PaystubsScreen() {
@@ -39,29 +46,53 @@ export default function PaystubsScreen() {
     fetchPaystubs();
   }, []);
 
+  const getToken = async () => {
+    const authToken = await AsyncStorage.getItem('auth_token');
+    if (authToken) return authToken;
+    return await AsyncStorage.getItem('token');
+  };
+
   const apiRequest = async (endpoint: string) => {
-    const token = await AsyncStorage.getItem('auth_token');
+    const token = await getToken();
     const response = await fetch(`${API_URL}${endpoint}`, {
       headers: {
         'Content-Type': 'application/json',
-        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        Accept: 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
     });
-    
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Request failed' }));
-      throw new Error(error.detail || 'Request failed');
+
+    const raw = await response.text();
+    let data: any = [];
+
+    try {
+      data = raw ? JSON.parse(raw) : [];
+    } catch {
+      data = [];
     }
-    
-    return response.json();
+
+    if (!response.ok) {
+      throw new Error(data?.detail || data?.message || 'Request failed');
+    }
+
+    return data;
   };
 
   const fetchPaystubs = async () => {
     try {
-      const data = await apiRequest('/api/paystubs');
-      setPaystubs(data);
-    } catch (error) {
-      console.log('Fetch error:', error);
+      setIsLoading(true);
+
+      let data: any[] = [];
+      try {
+        data = await apiRequest('/api/paystubs/me');
+      } catch {
+        data = await apiRequest('/api/paystubs');
+      }
+
+      setPaystubs(Array.isArray(data) ? data : []);
+    } catch (error: any) {
+      console.log('Fetch paystubs error:', error);
+      Alert.alert('Error', error.message || 'Failed to load paystubs');
     } finally {
       setIsLoading(false);
     }
@@ -73,16 +104,66 @@ export default function PaystubsScreen() {
     setRefreshing(false);
   }, []);
 
+  const saveAndShareBase64Pdf = async (paystub: Paystub) => {
+    try {
+      if (!paystub.pdf_base64) {
+        Alert.alert('Error', 'No PDF available for this paystub');
+        return;
+      }
+
+      const fileName =
+        paystub.file_name ||
+        paystub.pdf_filename ||
+        `paystub-${paystub.id}.pdf`;
+
+      const fileUri = `${FileSystemLegacy.documentDirectory}${fileName}`;
+
+      await FileSystemLegacy.writeAsStringAsync(fileUri, paystub.pdf_base64, {
+        encoding: FileSystemLegacy.EncodingType.Base64,
+      });
+
+      const canShare = await Sharing.isAvailableAsync();
+      if (!canShare) {
+        Alert.alert('Error', 'Sharing is not available on this device');
+        return;
+      }
+
+      await Sharing.shareAsync(fileUri, {
+        mimeType: 'application/pdf',
+        dialogTitle: 'Open Paystub PDF',
+        UTI: '.pdf',
+      });
+    } catch (error: any) {
+      Alert.alert('Error', error.message || 'Failed to open PDF');
+    }
+  };
+
   const handleDownload = async (paystub: Paystub) => {
     try {
-      const token = await AsyncStorage.getItem('auth_token');
-      const downloadUrl = `${API_URL}/api/paystubs/${paystub.id}/download?token=${token}`;
-      
+      const token = await getToken();
+
+      if (paystub.pdf_url) {
+        const supported = await Linking.canOpenURL(paystub.pdf_url);
+        if (supported) {
+          await Linking.openURL(paystub.pdf_url);
+          return;
+        }
+      }
+
+      if (paystub.pdf_base64) {
+        await saveAndShareBase64Pdf(paystub);
+        return;
+      }
+
+      const downloadUrl = `${API_URL}/api/paystubs/${paystub.id}/download${
+        token ? `?token=${encodeURIComponent(token)}` : ''
+      }`;
+
       const supported = await Linking.canOpenURL(downloadUrl);
       if (supported) {
         await Linking.openURL(downloadUrl);
       } else {
-        Alert.alert('Error', 'Cannot open download link');
+        Alert.alert('Error', 'Cannot open paystub download link');
       }
     } catch (error: any) {
       Alert.alert('Error', error.message || 'Failed to download paystub');
@@ -93,37 +174,54 @@ export default function PaystubsScreen() {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
-    }).format(amount);
+    }).format(Number(amount || 0));
   };
 
   const formatDateRange = (start: string, end: string) => {
     const startDate = new Date(start);
     const endDate = new Date(end);
-    return `${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+
+    return `${startDate.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+    })} - ${endDate.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    })}`;
+  };
+
+  const formatPayDate = (payDate?: string) => {
+    if (!payDate) return 'Pay date unavailable';
+
+    return new Date(payDate).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
   };
 
   const renderPaystub = ({ item }: { item: Paystub }) => (
-    <TouchableOpacity
-      style={styles.paystubCard}
-      onPress={() => handleDownload(item)}
-    >
+    <TouchableOpacity style={styles.paystubCard} onPress={() => handleDownload(item)}>
       <View style={styles.paystubIcon}>
         <Ionicons name="document-text" size={28} color="#3B82F6" />
       </View>
-      
+
       <View style={styles.paystubContent}>
         <Text style={styles.paystubPeriod}>
           {formatDateRange(item.pay_period_start, item.pay_period_end)}
         </Text>
-        <Text style={styles.payDate}>
-          Paid: {new Date(item.pay_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-        </Text>
+
+        <Text style={styles.payDate}>Paid: {formatPayDate(item.pay_date)}</Text>
+
         <View style={styles.payAmounts}>
           <Text style={styles.netPay}>{formatCurrency(item.net_pay)}</Text>
-          <Text style={styles.grossPay}>Gross: {formatCurrency(item.gross_pay)}</Text>
+          <Text style={styles.grossPay}>
+            Gross: {formatCurrency(item.gross_pay)}
+          </Text>
         </View>
       </View>
-      
+
       <View style={styles.downloadIcon}>
         <Ionicons name="download-outline" size={24} color="#64748B" />
       </View>
@@ -238,6 +336,7 @@ const styles = StyleSheet.create({
     alignItems: 'baseline',
     gap: 10,
     marginTop: 6,
+    flexWrap: 'wrap',
   },
   netPay: {
     fontSize: 18,

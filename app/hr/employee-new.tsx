@@ -8,6 +8,10 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
+  Platform,
+  TouchableWithoutFeedback,
+  Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,6 +20,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 
 const RAW_API_URL =
+  process.env.EXPO_PUBLIC_BACKEND_URL ||
   Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL ||
   'https://workpulse-hr.onrender.com';
 
@@ -25,6 +30,8 @@ interface Department {
   id: string;
   name: string;
 }
+
+type PayType = 'hourly' | 'salary';
 
 export default function HREmployeeNewScreen() {
   const router = useRouter();
@@ -47,14 +54,20 @@ export default function HREmployeeNewScreen() {
   const [dateOfBirth, setDateOfBirth] = useState('');
   const [hourlyRate, setHourlyRate] = useState('');
   const [salary, setSalary] = useState('');
-  const [payType, setPayType] = useState<'hourly' | 'salary'>('hourly');
+  const [payType, setPayType] = useState<PayType>('hourly');
 
   useEffect(() => {
     fetchDepartments();
   }, []);
 
+  const getToken = async () => {
+    const authToken = await AsyncStorage.getItem('auth_token');
+    if (authToken) return authToken;
+    return await AsyncStorage.getItem('token');
+  };
+
   const apiRequest = async (endpoint: string, method: string = 'GET', body?: any) => {
-    const token = await AsyncStorage.getItem('auth_token');
+    const token = await getToken();
 
     const response = await fetch(`${API_URL}${endpoint}`, {
       method,
@@ -76,7 +89,7 @@ export default function HREmployeeNewScreen() {
     }
 
     if (!response.ok) {
-      throw new Error(data?.detail || 'Request failed');
+      throw new Error(data?.detail || data?.message || 'Request failed');
     }
 
     return data;
@@ -84,6 +97,7 @@ export default function HREmployeeNewScreen() {
 
   const fetchDepartments = async () => {
     try {
+      setLoadingDepartments(true);
       const data = await apiRequest('/api/departments');
       setDepartments(Array.isArray(data) ? data : []);
     } catch (error: any) {
@@ -93,7 +107,15 @@ export default function HREmployeeNewScreen() {
     }
   };
 
+  const isValidDateString = (value: string) => {
+    if (!value.trim()) return true;
+    return /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
+  };
+
   const handleSaveEmployee = async () => {
+    Keyboard.dismiss();
+    setShowDepartmentDropdown(false);
+
     if (
       !employeeId.trim() ||
       !firstName.trim() ||
@@ -107,14 +129,38 @@ export default function HREmployeeNewScreen() {
       return;
     }
 
-    if (payType === 'hourly' && !hourlyRate.trim()) {
-      Alert.alert('Missing Hourly Rate', 'Please enter an hourly rate.');
+    if (!isValidDateString(startDate)) {
+      Alert.alert('Invalid Start Date', 'Please use YYYY-MM-DD for the start date.');
       return;
     }
 
-    if (payType === 'salary' && !salary.trim()) {
-      Alert.alert('Missing Salary', 'Please enter a salary.');
+    if (!isValidDateString(dateOfBirth)) {
+      Alert.alert('Invalid Date of Birth', 'Please use YYYY-MM-DD for the date of birth.');
       return;
+    }
+
+    if (payType === 'hourly') {
+      if (!hourlyRate.trim()) {
+        Alert.alert('Missing Hourly Rate', 'Please enter an hourly rate.');
+        return;
+      }
+
+      if (Number.isNaN(Number(hourlyRate)) || Number(hourlyRate) <= 0) {
+        Alert.alert('Invalid Hourly Rate', 'Please enter a valid hourly rate.');
+        return;
+      }
+    }
+
+    if (payType === 'salary') {
+      if (!salary.trim()) {
+        Alert.alert('Missing Salary', 'Please enter a salary.');
+        return;
+      }
+
+      if (Number.isNaN(Number(salary)) || Number(salary) <= 0) {
+        Alert.alert('Invalid Salary', 'Please enter a valid annual salary.');
+        return;
+      }
     }
 
     setIsLoading(true);
@@ -151,6 +197,12 @@ export default function HREmployeeNewScreen() {
     }
   };
 
+  const handleSelectDepartment = (dept: Department) => {
+    setDepartmentId(dept.id);
+    setDepartmentName(dept.name);
+    setShowDepartmentDropdown(false);
+  };
+
   const InputField = ({
     label,
     value,
@@ -158,6 +210,8 @@ export default function HREmployeeNewScreen() {
     placeholder,
     keyboardType = 'default',
     required = false,
+    autoCapitalize,
+    returnKeyType = 'next',
   }: {
     label: string;
     value: string;
@@ -165,6 +219,8 @@ export default function HREmployeeNewScreen() {
     placeholder: string;
     keyboardType?: 'default' | 'email-address' | 'numeric' | 'phone-pad';
     required?: boolean;
+    autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
+    returnKeyType?: 'done' | 'next' | 'go' | 'search' | 'send';
   }) => (
     <View style={styles.inputGroup}>
       <Text style={styles.label}>
@@ -177,252 +233,311 @@ export default function HREmployeeNewScreen() {
         placeholder={placeholder}
         placeholderTextColor="#94A3B8"
         keyboardType={keyboardType}
-        autoCapitalize={keyboardType === 'email-address' ? 'none' : 'sentences'}
+        autoCapitalize={
+          autoCapitalize ?? (keyboardType === 'email-address' ? 'none' : 'sentences')
+        }
+        autoCorrect={false}
+        blurOnSubmit={false}
+        returnKeyType={returnKeyType}
+        onFocus={() => setShowDepartmentDropdown(false)}
       />
     </View>
   );
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={24} color="#1E293B" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Add Employee</Text>
-        <View style={{ width: 40 }} />
-      </View>
+      <TouchableWithoutFeedback
+        onPress={() => {
+          Keyboard.dismiss();
+          setShowDepartmentDropdown(false);
+        }}
+      >
+        <View style={styles.flex}>
+          <View style={styles.header}>
+            <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+              <Ionicons name="arrow-back" size={24} color="#1E293B" />
+            </TouchableOpacity>
+            <Text style={styles.headerTitle}>Add Employee</Text>
+            <View style={{ width: 40 }} />
+          </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Basic Information</Text>
+          <KeyboardAvoidingView
+            style={styles.flex}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 12 : 0}
+          >
+            <ScrollView
+              contentContainerStyle={styles.scrollContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+            >
+              <View style={styles.card}>
+                <Text style={styles.sectionTitle}>Basic Information</Text>
 
-          <InputField
-            label="Employee Number"
-            value={employeeId}
-            onChangeText={setEmployeeId}
-            placeholder="EMP001"
-            required
-          />
+                <InputField
+                  label="Employee Number"
+                  value={employeeId}
+                  onChangeText={setEmployeeId}
+                  placeholder="EMP001"
+                  required
+                />
 
-          <InputField
-            label="First Name"
-            value={firstName}
-            onChangeText={setFirstName}
-            placeholder="John"
-            required
-          />
+                <InputField
+                  label="First Name"
+                  value={firstName}
+                  onChangeText={setFirstName}
+                  placeholder="John"
+                  required
+                />
 
-          <InputField
-            label="Last Name"
-            value={lastName}
-            onChangeText={setLastName}
-            placeholder="Smith"
-            required
-          />
+                <InputField
+                  label="Last Name"
+                  value={lastName}
+                  onChangeText={setLastName}
+                  placeholder="Smith"
+                  required
+                />
 
-          <InputField
-            label="Email"
-            value={email}
-            onChangeText={setEmail}
-            placeholder="john.smith@company.com"
-            keyboardType="email-address"
-            required
-          />
+                <InputField
+                  label="Email"
+                  value={email}
+                  onChangeText={setEmail}
+                  placeholder="john.smith@company.com"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  required
+                />
 
-          <InputField
-            label="Phone Number"
-            value={phone}
-            onChangeText={setPhone}
-            placeholder="+1 555 123 4567"
-            keyboardType="phone-pad"
-          />
+                <InputField
+                  label="Phone Number"
+                  value={phone}
+                  onChangeText={setPhone}
+                  placeholder="+1 555 123 4567"
+                  keyboardType="phone-pad"
+                />
 
-          <InputField
-            label="Date of Birth"
-            value={dateOfBirth}
-            onChangeText={setDateOfBirth}
-            placeholder="YYYY-MM-DD"
-          />
+                <InputField
+                  label="Date of Birth"
+                  value={dateOfBirth}
+                  onChangeText={setDateOfBirth}
+                  placeholder="YYYY-MM-DD"
+                />
 
-          <InputField
-            label="Start Date"
-            value={startDate}
-            onChangeText={setStartDate}
-            placeholder="YYYY-MM-DD"
-            required
-          />
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Work Information</Text>
-
-          <InputField
-            label="Job Title"
-            value={jobTitle}
-            onChangeText={setJobTitle}
-            placeholder="Frontend Developer"
-            required
-          />
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>
-              Department <Text style={styles.required}>*</Text>
-            </Text>
-
-            {loadingDepartments ? (
-              <View style={styles.dropdownButton}>
-                <ActivityIndicator size="small" color="#3B82F6" />
+                <InputField
+                  label="Start Date"
+                  value={startDate}
+                  onChangeText={setStartDate}
+                  placeholder="YYYY-MM-DD"
+                  required
+                />
               </View>
-            ) : (
-              <>
-                <TouchableOpacity
-                  style={styles.dropdownButton}
-                  onPress={() => setShowDepartmentDropdown(!showDepartmentDropdown)}
-                >
-                  <Text style={[styles.dropdownText, !departmentName && styles.placeholderText]}>
-                    {departmentName || 'Select department'}
-                  </Text>
-                  <Ionicons
-                    name={showDepartmentDropdown ? 'chevron-up' : 'chevron-down'}
-                    size={20}
-                    color="#64748B"
-                  />
-                </TouchableOpacity>
 
-                {showDepartmentDropdown && (
-                  <View style={styles.dropdownMenu}>
-                    {departments.map((dept) => (
+              <View style={[styles.card, styles.dropdownSection]}>
+                <Text style={styles.sectionTitle}>Work Information</Text>
+
+                <InputField
+                  label="Job Title"
+                  value={jobTitle}
+                  onChangeText={setJobTitle}
+                  placeholder="Frontend Developer"
+                  required
+                />
+
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>
+                    Department <Text style={styles.required}>*</Text>
+                  </Text>
+
+                  {loadingDepartments ? (
+                    <View style={styles.dropdownButton}>
+                      <ActivityIndicator size="small" color="#3B82F6" />
+                    </View>
+                  ) : (
+                    <View style={styles.dropdownWrap}>
                       <TouchableOpacity
-                        key={dept.id}
-                        style={styles.dropdownItem}
+                        style={styles.dropdownButton}
+                        activeOpacity={0.8}
                         onPress={() => {
-                          setDepartmentId(dept.id);
-                          setDepartmentName(dept.name);
-                          setShowDepartmentDropdown(false);
+                          Keyboard.dismiss();
+                          setShowDepartmentDropdown((prev) => !prev);
                         }}
                       >
-                        <Text style={styles.dropdownItemText}>{dept.name}</Text>
+                        <Text
+                          style={[
+                            styles.dropdownText,
+                            !departmentName && styles.placeholderText,
+                          ]}
+                        >
+                          {departmentName || 'Select department'}
+                        </Text>
+                        <Ionicons
+                          name={showDepartmentDropdown ? 'chevron-up' : 'chevron-down'}
+                          size={20}
+                          color="#64748B"
+                        />
                       </TouchableOpacity>
-                    ))}
+
+                      {showDepartmentDropdown && (
+                        <View style={styles.dropdownMenu}>
+                          {departments.length === 0 ? (
+                            <View style={styles.dropdownItem}>
+                              <Text style={styles.placeholderText}>No departments found</Text>
+                            </View>
+                          ) : (
+                            departments.map((dept, index) => (
+                              <TouchableOpacity
+                                key={dept.id}
+                                style={[
+                                  styles.dropdownItem,
+                                  index === departments.length - 1 && styles.dropdownItemLast,
+                                ]}
+                                onPress={() => handleSelectDepartment(dept)}
+                              >
+                                <Text style={styles.dropdownItemText}>{dept.name}</Text>
+                              </TouchableOpacity>
+                            ))
+                          )}
+                        </View>
+                      )}
+                    </View>
+                  )}
+                </View>
+
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>Employment Type</Text>
+                  <View style={styles.rowButtons}>
+                    <TouchableOpacity
+                      style={[
+                        styles.optionButton,
+                        employmentType === 'Full-time' && styles.optionButtonActive,
+                      ]}
+                      onPress={() => setEmploymentType('Full-time')}
+                    >
+                      <Text
+                        style={[
+                          styles.optionButtonText,
+                          employmentType === 'Full-time' && styles.optionButtonTextActive,
+                        ]}
+                      >
+                        Full-time
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.optionButton,
+                        employmentType === 'Part-time' && styles.optionButtonActive,
+                      ]}
+                      onPress={() => setEmploymentType('Part-time')}
+                    >
+                      <Text
+                        style={[
+                          styles.optionButtonText,
+                          employmentType === 'Part-time' && styles.optionButtonTextActive,
+                        ]}
+                      >
+                        Part-time
+                      </Text>
+                    </TouchableOpacity>
                   </View>
+                </View>
+              </View>
+
+              <View style={styles.card}>
+                <Text style={styles.sectionTitle}>Pay Information</Text>
+
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>Pay Type</Text>
+                  <View style={styles.rowButtons}>
+                    <TouchableOpacity
+                      style={[
+                        styles.optionButton,
+                        payType === 'hourly' && styles.optionButtonActive,
+                      ]}
+                      onPress={() => setPayType('hourly')}
+                    >
+                      <Text
+                        style={[
+                          styles.optionButtonText,
+                          payType === 'hourly' && styles.optionButtonTextActive,
+                        ]}
+                      >
+                        Hourly
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.optionButton,
+                        payType === 'salary' && styles.optionButtonActive,
+                      ]}
+                      onPress={() => setPayType('salary')}
+                    >
+                      <Text
+                        style={[
+                          styles.optionButtonText,
+                          payType === 'salary' && styles.optionButtonTextActive,
+                        ]}
+                      >
+                        Salaried
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {payType === 'hourly' ? (
+                  <InputField
+                    label="Hourly Rate"
+                    value={hourlyRate}
+                    onChangeText={setHourlyRate}
+                    placeholder="25"
+                    keyboardType="numeric"
+                    required
+                    returnKeyType="done"
+                  />
+                ) : (
+                  <InputField
+                    label="Annual Salary"
+                    value={salary}
+                    onChangeText={setSalary}
+                    placeholder="60000"
+                    keyboardType="numeric"
+                    required
+                    returnKeyType="done"
+                  />
                 )}
-              </>
-            )}
-          </View>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Employment Type</Text>
-            <View style={styles.rowButtons}>
-              <TouchableOpacity
-                style={[styles.optionButton, employmentType === 'Full-time' && styles.optionButtonActive]}
-                onPress={() => setEmploymentType('Full-time')}
-              >
-                <Text
-                  style={[
-                    styles.optionButtonText,
-                    employmentType === 'Full-time' && styles.optionButtonTextActive,
-                  ]}
-                >
-                  Full-time
-                </Text>
-              </TouchableOpacity>
+              </View>
 
               <TouchableOpacity
-                style={[styles.optionButton, employmentType === 'Part-time' && styles.optionButtonActive]}
-                onPress={() => setEmploymentType('Part-time')}
+                style={[styles.saveButton, isLoading && styles.saveButtonDisabled]}
+                onPress={handleSaveEmployee}
+                disabled={isLoading}
+                activeOpacity={0.85}
               >
-                <Text
-                  style={[
-                    styles.optionButtonText,
-                    employmentType === 'Part-time' && styles.optionButtonTextActive,
-                  ]}
-                >
-                  Part-time
-                </Text>
+                {isLoading ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <>
+                    <Ionicons name="save-outline" size={20} color="#FFFFFF" />
+                    <Text style={styles.saveButtonText}>Save Employee</Text>
+                  </>
+                )}
               </TouchableOpacity>
-            </View>
-          </View>
+
+              <View style={{ height: 30 }} />
+            </ScrollView>
+          </KeyboardAvoidingView>
         </View>
-
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Pay Information</Text>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Pay Type</Text>
-            <View style={styles.rowButtons}>
-              <TouchableOpacity
-                style={[styles.optionButton, payType === 'hourly' && styles.optionButtonActive]}
-                onPress={() => setPayType('hourly')}
-              >
-                <Text
-                  style={[
-                    styles.optionButtonText,
-                    payType === 'hourly' && styles.optionButtonTextActive,
-                  ]}
-                >
-                  Hourly
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.optionButton, payType === 'salary' && styles.optionButtonActive]}
-                onPress={() => setPayType('salary')}
-              >
-                <Text
-                  style={[
-                    styles.optionButtonText,
-                    payType === 'salary' && styles.optionButtonTextActive,
-                  ]}
-                >
-                  Salaried
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {payType === 'hourly' ? (
-            <InputField
-              label="Hourly Rate"
-              value={hourlyRate}
-              onChangeText={setHourlyRate}
-              placeholder="25"
-              keyboardType="numeric"
-              required
-            />
-          ) : (
-            <InputField
-              label="Annual Salary"
-              value={salary}
-              onChangeText={setSalary}
-              placeholder="60000"
-              keyboardType="numeric"
-              required
-            />
-          )}
-        </View>
-
-        <TouchableOpacity
-          style={[styles.saveButton, isLoading && styles.saveButtonDisabled]}
-          onPress={handleSaveEmployee}
-          disabled={isLoading}
-        >
-          {isLoading ? (
-            <ActivityIndicator color="#FFFFFF" />
-          ) : (
-            <>
-              <Ionicons name="save-outline" size={20} color="#FFFFFF" />
-              <Text style={styles.saveButtonText}>Save Employee</Text>
-            </>
-          )}
-        </TouchableOpacity>
-
-        <View style={{ height: 30 }} />
-      </ScrollView>
+      </TouchableWithoutFeedback>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  flex: {
+    flex: 1,
+  },
   container: {
     flex: 1,
     backgroundColor: '#F8FAFC',
@@ -436,6 +551,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E2E8F0',
+    zIndex: 20,
   },
   backButton: {
     width: 40,
@@ -462,6 +578,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 6,
     elevation: 2,
+  },
+  dropdownSection: {
+    zIndex: 50,
   },
   sectionTitle: {
     fontSize: 16,
@@ -491,6 +610,10 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#1E293B',
   },
+  dropdownWrap: {
+    position: 'relative',
+    zIndex: 100,
+  },
   dropdownButton: {
     backgroundColor: '#F8FAFC',
     borderWidth: 1,
@@ -505,6 +628,8 @@ const styles = StyleSheet.create({
   dropdownText: {
     fontSize: 16,
     color: '#1E293B',
+    flex: 1,
+    paddingRight: 8,
   },
   placeholderText: {
     color: '#94A3B8',
@@ -522,6 +647,9 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderBottomWidth: 1,
     borderBottomColor: '#F1F5F9',
+  },
+  dropdownItemLast: {
+    borderBottomWidth: 0,
   },
   dropdownItemText: {
     fontSize: 15,

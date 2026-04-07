@@ -25,7 +25,9 @@ export default function OfflineIndicator({ showPendingCount = true }: OfflineInd
       }
     });
 
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   useEffect(() => {

@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -6,15 +6,27 @@ import {
   TouchableOpacity,
   ScrollView,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../../src/context/AuthContext';
+import { API_URL } from '../../src/context/AuthContext';
+
+type DashboardCardProps = {
+  title: string;
+  subtitle: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  color: string;
+  onPress: () => void;
+};
 
 export default function HRDashboardScreen() {
   const router = useRouter();
   const { user, logout } = useAuth();
+  const [seeding, setSeeding] = useState(false);
 
   useEffect(() => {
     if (
@@ -27,6 +39,66 @@ export default function HRDashboardScreen() {
       router.replace('/(tabs)/dashboard');
     }
   }, [user, router]);
+
+  const canSeedDemoData = useMemo(
+    () => user?.role === 'super_admin' || user?.role === 'hr_admin' || user?.role === 'hr',
+    [user?.role]
+  );
+
+  const getToken = async () => {
+    const authToken = await AsyncStorage.getItem('auth_token');
+    if (authToken) return authToken;
+    return await AsyncStorage.getItem('token');
+  };
+
+  const handleSeedDemoData = () => {
+    Alert.alert(
+      'Seed Demo Data',
+      'This will add demo records for testing. Continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Seed Data',
+          onPress: async () => {
+            try {
+              setSeeding(true);
+              const token = await getToken();
+              const response = await fetch(`${API_URL}/api/seed-data`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Accept: 'application/json',
+                  ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                },
+              });
+
+              const raw = await response.text();
+              let data: any = null;
+
+              try {
+                data = raw ? JSON.parse(raw) : null;
+              } catch {
+                data = { detail: raw || 'Seed request failed' };
+              }
+
+              if (!response.ok) {
+                throw new Error(data?.detail || data?.message || 'Failed to seed demo data');
+              }
+
+              Alert.alert(
+                'Success',
+                data?.message || 'Demo data added successfully. Refresh the pages to view it.'
+              );
+            } catch (error: any) {
+              Alert.alert('Seed Failed', error.message || 'Could not seed demo data');
+            } finally {
+              setSeeding(false);
+            }
+          },
+        },
+      ]
+    );
+  };
 
   const handleLogout = () => {
     Alert.alert('Logout', 'Are you sure you want to logout?', [
@@ -42,19 +114,7 @@ export default function HRDashboardScreen() {
     ]);
   };
 
-  const DashboardCard = ({
-    title,
-    subtitle,
-    icon,
-    color,
-    onPress,
-  }: {
-    title: string;
-    subtitle: string;
-    icon: keyof typeof Ionicons.glyphMap;
-    color: string;
-    onPress: () => void;
-  }) => (
+  const DashboardCard = ({ title, subtitle, icon, color, onPress }: DashboardCardProps) => (
     <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.85}>
       <View style={[styles.cardIcon, { backgroundColor: `${color}15` }]}>
         <Ionicons name={icon} size={26} color={color} />
@@ -100,6 +160,33 @@ export default function HRDashboardScreen() {
             Manage employees, payroll, paystubs, and leave requests from one place.
           </Text>
         </View>
+
+        {canSeedDemoData && (
+          <View style={styles.seedCard}>
+            <View style={styles.seedTextWrap}>
+              <Text style={styles.seedTitle}>Seed demo data</Text>
+              <Text style={styles.seedSubtitle}>
+                Add test employees, attendance, payroll, and leave data for quick end-to-end testing.
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={[styles.seedButton, seeding && styles.seedButtonDisabled]}
+              onPress={handleSeedDemoData}
+              disabled={seeding}
+              activeOpacity={0.85}
+            >
+              {seeding ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <>
+                  <Ionicons name="flask-outline" size={18} color="#FFFFFF" />
+                  <Text style={styles.seedButtonText}>Seed Demo Data</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+        )}
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Management</Text>
@@ -180,7 +267,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderRadius: 20,
     padding: 20,
-    marginBottom: 24,
+    marginBottom: 18,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.06,
@@ -219,6 +306,43 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     color: '#475569',
+  },
+  seedCard: {
+    backgroundColor: '#0F172A',
+    borderRadius: 20,
+    padding: 18,
+    marginBottom: 24,
+    gap: 14,
+  },
+  seedTextWrap: {
+    gap: 6,
+  },
+  seedTitle: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  seedSubtitle: {
+    color: '#CBD5E1',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  seedButton: {
+    minHeight: 48,
+    borderRadius: 14,
+    backgroundColor: '#2563EB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  seedButtonDisabled: {
+    opacity: 0.75,
+  },
+  seedButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
   },
   section: {
     marginTop: 6,
@@ -261,25 +385,26 @@ const styles = StyleSheet.create({
     color: '#1E293B',
   },
   cardSubtitle: {
-    fontSize: 13,
+    fontSize: 14,
     color: '#64748B',
-    marginTop: 3,
+    marginTop: 4,
   },
   logoutButton: {
     marginTop: 18,
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
-    paddingVertical: 16,
-    justifyContent: 'center',
+    paddingVertical: 15,
+    paddingHorizontal: 16,
     alignItems: 'center',
+    justifyContent: 'center',
     flexDirection: 'row',
     gap: 8,
     borderWidth: 1,
     borderColor: '#FECACA',
   },
   logoutText: {
-    fontSize: 15,
-    fontWeight: '600',
     color: '#EF4444',
+    fontWeight: '700',
+    fontSize: 15,
   },
 });
