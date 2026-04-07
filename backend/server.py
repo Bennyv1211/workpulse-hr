@@ -17,6 +17,7 @@ import re
 from bson import ObjectId
 import io
 import csv
+import base64
 from math import radians, cos, sin, asin, sqrt
 import asyncio
 from reportlab.lib.pagesizes import letter
@@ -94,12 +95,12 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         raise HTTPException(status_code=401, detail="Invalid token")
 
 async def require_admin(current_user: dict = Depends(get_current_user)):
-    if current_user["role"] not in ["super_admin", "hr_admin"]:
+    if current_user["role"] not in ["super_admin", "hr_admin", "hr"]:
         raise HTTPException(status_code=403, detail="Admin access required")
     return current_user
 
 async def require_manager(current_user: dict = Depends(get_current_user)):
-    if current_user["role"] not in ["super_admin", "hr_admin", "manager"]:
+    if current_user["role"] not in ["super_admin", "hr_admin", "manager", "hr"]:
         raise HTTPException(status_code=403, detail="Manager access required")
     return current_user
 
@@ -470,6 +471,26 @@ class PayrollResponse(BaseModel):
     status: str = "pending"
     notes: Optional[str] = None
     created_at: datetime
+
+class PaystubCreate(BaseModel):
+    employee_id: str
+    payroll_id: Optional[str] = None
+    pay_period_start: str
+    pay_period_end: str
+    gross_pay: float
+    deductions: float = 0
+    tax: float = 0
+    benefits_deduction: float = 0
+    bonus: float = 0
+    net_pay: float
+    pay_date: Optional[str] = None
+    pdf_base64: Optional[str] = None
+    file_name: Optional[str] = None
+    published: bool = True
+
+class PaystubBulkSend(BaseModel):
+    paystub_ids: List[str] = Field(default_factory=list)
+    payroll_ids: List[str] = Field(default_factory=list)
 
 # Training Models
 class TrainingVideoCreate(BaseModel):
@@ -1027,6 +1048,92 @@ async def cancel_time_off_request(request_id: str, current_user: dict = Depends(
 
 # ===== Paystub Routes (NEW) =====
 
+def decode_paystub_pdf(pdf_base64: Optional[str]) -> Optional[bytes]:
+    if not pdf_base64:
+        return None
+
+    encoded = pdf_base64.split(",", 1)[1] if "," in pdf_base64 else pdf_base64
+    try:
+        return base64.b64decode(encoded)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid paystub PDF content") from exc
+
+async def upsert_paystub(payload: PaystubCreate, current_user: dict) -> dict:
+    employee = await db.employees.find_one({"id": payload.employee_id})
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    pay_date = payload.pay_date or datetime.utcnow().strftime("%Y-%m-%d")
+    employee_name = f"{employee.get('first_name', '')} {employee.get('last_name', '')}".strip() or "Employee"
+    employee_code = employee.get("employee_id", payload.employee_id)
+    pdf_bytes = decode_paystub_pdf(payload.pdf_base64) or make_pdf_bytes(
+        employee_name=employee_name,
+        employee_code=employee_code,
+        pay_period_start=payload.pay_period_start,
+        pay_period_end=payload.pay_period_end,
+        pay_date=pay_date,
+        gross_pay=payload.gross_pay,
+        net_pay=payload.net_pay,
+    )
+
+    existing_paystub = None
+    if payload.payroll_id:
+        existing_paystub = await db.paystubs.find_one({"payroll_id": payload.payroll_id})
+
+    if not existing_paystub:
+        existing_paystub = await db.paystubs.find_one({
+            "employee_id": payload.employee_id,
+            "pay_period_start": payload.pay_period_start,
+            "pay_period_end": payload.pay_period_end,
+        })
+
+    update_doc = {
+        "employee_id": payload.employee_id,
+        "payroll_id": payload.payroll_id,
+        "pay_period_start": payload.pay_period_start,
+        "pay_period_end": payload.pay_period_end,
+        "pay_date": pay_date,
+        "gross_pay": payload.gross_pay,
+        "deductions": payload.deductions,
+        "tax": payload.tax,
+        "benefits_deduction": payload.benefits_deduction,
+        "bonus": payload.bonus,
+        "net_pay": payload.net_pay,
+        "pdf_filename": payload.file_name or f"{employee_code}_{pay_date}.pdf",
+        "pdf_content": pdf_bytes,
+        "published": payload.published,
+        "updated_at": datetime.utcnow(),
+    }
+
+    if existing_paystub:
+        paystub_id = existing_paystub["id"]
+        await db.paystubs.update_one({"id": paystub_id}, {"$set": update_doc})
+        action = "paystub_updated"
+    else:
+        paystub_id = str(uuid.uuid4())
+        update_doc["id"] = paystub_id
+        update_doc["created_at"] = datetime.utcnow()
+        await db.paystubs.insert_one(update_doc)
+        action = "paystub_created"
+
+    if payload.payroll_id:
+        await db.payroll.update_one(
+            {"id": payload.payroll_id},
+            {"$set": {"status": "sent"}}
+        )
+
+    await log_activity(
+        current_user["id"],
+        action,
+        f"Paystub saved for {employee_name} ({payload.pay_period_start} to {payload.pay_period_end})",
+        metadata={"employee_id": payload.employee_id, "payroll_id": payload.payroll_id, "paystub_id": paystub_id},
+    )
+
+    saved = await db.paystubs.find_one({"id": paystub_id})
+    if not saved:
+        raise HTTPException(status_code=500, detail="Paystub could not be saved")
+    return saved
+
 @api_router.get("/paystubs")
 async def get_paystubs(current_user: dict = Depends(get_current_user)):
     """Get all paystubs for the current employee"""
@@ -1050,6 +1157,79 @@ async def get_paystubs(current_user: dict = Depends(get_current_user)):
         "net_pay": p.get("net_pay", 0),
         "pdf_filename": p.get("pdf_filename", "Paystub.pdf")
     } for p in paystubs]
+
+@api_router.post("/paystubs")
+async def create_or_update_paystub(payload: PaystubCreate, current_user: dict = Depends(require_admin)):
+    saved = await upsert_paystub(payload, current_user)
+    return {
+        "message": "Paystub saved successfully",
+        "id": saved["id"],
+        "payroll_id": saved.get("payroll_id"),
+        "pay_date": saved.get("pay_date"),
+        "pdf_filename": saved.get("pdf_filename"),
+    }
+
+@api_router.post("/paystubs/send")
+async def send_paystubs(payload: PaystubBulkSend, current_user: dict = Depends(require_admin)):
+    requested_ids = payload.payroll_ids or payload.paystub_ids
+    if not requested_ids:
+        raise HTTPException(status_code=400, detail="No paystubs selected")
+
+    requested_ids = list(dict.fromkeys(requested_ids))
+    sent_paystub_ids: List[str] = []
+
+    existing_paystubs = await db.paystubs.find({"id": {"$in": requested_ids}}).to_list(len(requested_ids))
+    for paystub in existing_paystubs:
+        sent_paystub_ids.append(paystub["id"])
+        if paystub.get("payroll_id"):
+            await db.payroll.update_one(
+                {"id": paystub["payroll_id"]},
+                {"$set": {"status": "sent"}}
+            )
+
+    existing_paystub_ids = {paystub["id"] for paystub in existing_paystubs}
+    unresolved_ids = [item_id for item_id in requested_ids if item_id not in existing_paystub_ids]
+
+    if unresolved_ids:
+        payroll_records = await db.payroll.find({"id": {"$in": unresolved_ids}}).to_list(len(unresolved_ids))
+        payroll_ids_found = {payroll["id"] for payroll in payroll_records}
+
+        for payroll in payroll_records:
+            saved = await upsert_paystub(
+                PaystubCreate(
+                    employee_id=payroll["employee_id"],
+                    payroll_id=payroll["id"],
+                    pay_period_start=payroll["pay_period_start"],
+                    pay_period_end=payroll["pay_period_end"],
+                    gross_pay=payroll["gross_pay"],
+                    deductions=payroll.get("deductions", 0),
+                    tax=payroll.get("tax", 0),
+                    benefits_deduction=payroll.get("benefits_deduction", 0),
+                    bonus=payroll.get("bonus", 0),
+                    net_pay=payroll["net_pay"],
+                    pay_date=payroll.get("pay_period_end"),
+                ),
+                current_user,
+            )
+            sent_paystub_ids.append(saved["id"])
+
+        missing_ids = [item_id for item_id in unresolved_ids if item_id not in payroll_ids_found]
+    else:
+        missing_ids = []
+
+    await log_activity(
+        current_user["id"],
+        "paystubs_sent",
+        f"Processed {len(sent_paystub_ids)} paystubs for delivery",
+        metadata={"requested_ids": requested_ids, "sent_paystub_ids": sent_paystub_ids, "missing_ids": missing_ids},
+    )
+
+    return {
+        "message": f"Processed {len(sent_paystub_ids)} paystub(s)",
+        "processed_count": len(sent_paystub_ids),
+        "paystub_ids": sent_paystub_ids,
+        "missing_ids": missing_ids,
+    }
 
 @api_router.get("/paystubs/{paystub_id}/download")
 async def download_paystub(paystub_id: str, token: Optional[str] = None, current_user: dict = Depends(get_current_user)):
