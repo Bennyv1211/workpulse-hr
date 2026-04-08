@@ -166,6 +166,10 @@ async def clear_demo_data():
         "hr@test.com",
         "manager@test.com",
         "superadmin@test.com",
+        "employee@company.com",
+        "hr@company.com",
+        "manager@company.com",
+        "superadmin@company.com",
     ]
 
     demo_users = await db.users.find({"email": {"$in": demo_emails}}).to_list(100)
@@ -282,6 +286,8 @@ class EmployeeCreate(BaseModel):
     first_name: str
     last_name: str
     email: EmailStr
+    role: str = "employee"
+    temporary_password: Optional[str] = None
     phone: Optional[str] = None
     job_title: str
     department_id: str
@@ -303,6 +309,37 @@ class EmployeeCreate(BaseModel):
     hourly_rate: Optional[float] = None
     skills: Optional[List[str]] = []
     notes: Optional[str] = None
+    leave_balance: Optional[Dict[str, float]] = None
+
+class EmployeeUpdate(BaseModel):
+    employee_id: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    role: Optional[str] = None
+    temporary_password: Optional[str] = None
+    phone: Optional[str] = None
+    job_title: Optional[str] = None
+    department_id: Optional[str] = None
+    manager_id: Optional[str] = None
+    work_location_id: Optional[str] = None
+    work_location: Optional[str] = None
+    employment_type: Optional[str] = None
+    start_date: Optional[str] = None
+    date_of_birth: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zip_code: Optional[str] = None
+    country: Optional[str] = None
+    emergency_contact: Optional[EmergencyContact] = None
+    bank_info: Optional[BankInfo] = None
+    tax_id: Optional[str] = None
+    salary: Optional[float] = None
+    hourly_rate: Optional[float] = None
+    skills: Optional[List[str]] = None
+    notes: Optional[str] = None
+    leave_balance: Optional[Dict[str, float]] = None
 
 class EmployeeResponse(BaseModel):
     id: str
@@ -311,6 +348,7 @@ class EmployeeResponse(BaseModel):
     first_name: str
     last_name: str
     email: str
+    role: str = "employee"
     phone: Optional[str] = None
     job_title: str
     department_id: str
@@ -426,6 +464,9 @@ class EmployeeProfileUpdate(BaseModel):
     next_of_kin_name: Optional[str] = None
     next_of_kin_phone: Optional[str] = None
     next_of_kin_relationship: Optional[str] = None
+
+class EmployeeLeaveBalanceUpdate(BaseModel):
+    leave_balance: Dict[str, float]
 
 class AttendanceManualCreate(BaseModel):
     employee_id: str
@@ -572,6 +613,63 @@ def map_leave_status_to_time_off_status(status_value: str) -> str:
     if status_value == "rejected":
         return "denied"
     return status_value
+
+def normalize_employee_role(role: Optional[str]) -> str:
+    allowed_roles = {"employee", "manager", "hr_admin", "hr", "super_admin"}
+    normalized = (role or "employee").strip().lower()
+    if normalized not in allowed_roles:
+        raise HTTPException(status_code=400, detail="Invalid employee role")
+    return normalized
+
+async def ensure_employee_user_account(
+    employee_id: str,
+    email: str,
+    first_name: str,
+    last_name: str,
+    role: str,
+    temporary_password: Optional[str],
+    existing_user_id: Optional[str] = None,
+):
+    normalized_email = email.lower()
+    user = None
+
+    if existing_user_id:
+        user = await db.users.find_one({"id": existing_user_id})
+    if not user:
+        user = await db.users.find_one({"email": normalized_email})
+
+    update_fields = {
+        "email": normalized_email,
+        "first_name": first_name,
+        "last_name": last_name,
+        "role": role,
+        "employee_id": employee_id,
+        "updated_at": datetime.utcnow(),
+    }
+    if temporary_password:
+        update_fields["password_hash"] = get_password_hash(temporary_password)
+
+    if user:
+        await db.users.update_one({"id": user["id"]}, {"$set": update_fields})
+        return user["id"]
+
+    if not temporary_password:
+        return existing_user_id
+
+    user_id = str(uuid.uuid4())
+    await db.users.insert_one({
+        "id": user_id,
+        "email": normalized_email,
+        "password_hash": get_password_hash(temporary_password),
+        "first_name": first_name,
+        "last_name": last_name,
+        "role": role,
+        "employee_id": employee_id,
+        "onboarding_completed": False,
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
+    })
+    return user_id
 
 async def sync_shift_clock_in_to_attendance(employee: dict, local_time: Optional[str], timezone: Optional[str], latitude: Optional[float], longitude: Optional[float], clock_in_time: datetime):
     today = clock_in_time.strftime("%Y-%m-%d")
@@ -1047,6 +1145,7 @@ class TimeOffRequest(BaseModel):
     start_date: str
     end_date: str
     note: Optional[str] = None
+    leave_type_id: Optional[str] = None
 
 @api_router.get("/time-off")
 async def get_time_off_requests(current_user: dict = Depends(get_current_user)):
@@ -1066,6 +1165,8 @@ async def get_time_off_requests(current_user: dict = Depends(get_current_user)):
         "id": r["id"],
         "start_date": r["start_date"],
         "end_date": r["end_date"],
+        "leave_type_id": r.get("leave_type_id"),
+        "leave_type_name": r.get("leave_type_name", "Time Off"),
         "note": r.get("note"),
         "status": r["status"],
         "days_count": r.get("days_count", 1),
@@ -1083,18 +1184,35 @@ async def create_time_off_request(data: TimeOffRequest, current_user: dict = Dep
     if not employee:
         raise HTTPException(status_code=400, detail="Employee profile not found")
     
-    # Calculate days
     start = datetime.strptime(data.start_date, "%Y-%m-%d")
     end = datetime.strptime(data.end_date, "%Y-%m-%d")
-    days_count = (end - start).days + 1
+    days_count = calculate_days(data.start_date, data.end_date, False)
     
     if days_count < 1:
         raise HTTPException(status_code=400, detail="Invalid date range")
+
+    selected_leave_type_id = data.leave_type_id
+    leave_type_name = "Time Off"
+
+    if selected_leave_type_id:
+        leave_type = await db.leave_types.find_one({"id": selected_leave_type_id})
+        if not leave_type:
+            raise HTTPException(status_code=404, detail="Leave type not found")
+        leave_type_name = leave_type["name"]
+
+        current_balance = float(employee.get("leave_balance", {}).get(selected_leave_type_id, 0))
+        if current_balance < days_count:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Not enough {leave_type_name.lower()} balance remaining"
+            )
     
     request_id = str(uuid.uuid4())
     request = {
         "id": request_id,
         "employee_id": employee["id"],
+        "leave_type_id": selected_leave_type_id,
+        "leave_type_name": leave_type_name,
         "start_date": data.start_date,
         "end_date": data.end_date,
         "note": data.note,
@@ -1109,7 +1227,8 @@ async def create_time_off_request(data: TimeOffRequest, current_user: dict = Dep
     mirrored_leave_request = {
         "id": str(uuid.uuid4()),
         "employee_id": employee["id"],
-        "leave_type_id": "time_off",
+        "leave_type_id": selected_leave_type_id or "time_off",
+        "leave_type_name": leave_type_name,
         "start_date": data.start_date,
         "end_date": data.end_date,
         "days_count": float(days_count),
@@ -1394,6 +1513,8 @@ async def admin_get_time_off_requests(
             "employee_name": f"{employee.get('first_name', '')} {employee.get('last_name', '')}" if employee else "Unknown",
             "start_date": r["start_date"],
             "end_date": r["end_date"],
+            "leave_type_id": r.get("leave_type_id"),
+            "leave_type_name": r.get("leave_type_name", "Time Off"),
             "note": r.get("note"),
             "status": r["status"],
             "days_count": r.get("days_count", 1),
@@ -1646,8 +1767,18 @@ async def create_employee(emp: EmployeeCreate, current_user: dict = Depends(requ
     existing = await db.employees.find_one({"employee_id": emp.employee_id})
     if existing:
         raise HTTPException(status_code=400, detail="Employee ID already exists")
+
+    existing_email = await db.employees.find_one({"email": emp.email.lower()})
+    if existing_email:
+        raise HTTPException(status_code=400, detail="Employee email already exists")
+
+    if not emp.user_id:
+        existing_user = await db.users.find_one({"email": emp.email.lower()})
+        if existing_user:
+            raise HTTPException(status_code=400, detail="A user account with this email already exists")
     
     emp_id = str(uuid.uuid4())
+    role = normalize_employee_role(emp.role)
     dept = await db.departments.find_one({"id": emp.department_id})
     dept_name = dept["name"] if dept else None
     
@@ -1659,14 +1790,28 @@ async def create_employee(emp: EmployeeCreate, current_user: dict = Depends(requ
     
     leave_types = await db.leave_types.find().to_list(100)
     leave_balance = {lt["id"]: lt["days_per_year"] for lt in leave_types}
+    if emp.leave_balance:
+        for leave_type_id, balance_value in emp.leave_balance.items():
+            leave_balance[leave_type_id] = max(0.0, float(balance_value))
+
+    user_id = await ensure_employee_user_account(
+        employee_id=emp_id,
+        email=emp.email,
+        first_name=emp.first_name,
+        last_name=emp.last_name,
+        role=role,
+        temporary_password=emp.temporary_password,
+        existing_user_id=emp.user_id,
+    )
     
     employee = {
         "id": emp_id,
-        "user_id": emp.user_id,
+        "user_id": user_id,
         "employee_id": emp.employee_id,
         "first_name": emp.first_name,
         "last_name": emp.last_name,
         "email": emp.email.lower(),
+        "role": role,
         "phone": emp.phone,
         "job_title": emp.job_title,
         "department_id": emp.department_id,
@@ -1698,11 +1843,12 @@ async def create_employee(emp: EmployeeCreate, current_user: dict = Depends(requ
     
     return EmployeeResponse(
         id=emp_id,
-        user_id=emp.user_id,
+        user_id=user_id,
         employee_id=emp.employee_id,
         first_name=emp.first_name,
         last_name=emp.last_name,
         email=emp.email,
+        role=role,
         phone=emp.phone,
         job_title=emp.job_title,
         department_id=emp.department_id,
@@ -1764,6 +1910,7 @@ async def get_employees(
             first_name=emp["first_name"],
             last_name=emp["last_name"],
             email=emp["email"],
+            role=emp.get("role", "employee"),
             phone=emp.get("phone"),
             job_title=emp["job_title"],
             department_id=emp["department_id"],
@@ -1815,6 +1962,7 @@ async def get_employee(emp_id: str, current_user: dict = Depends(get_current_use
         first_name=emp["first_name"],
         last_name=emp["last_name"],
         email=emp["email"],
+        role=emp.get("role", "employee"),
         phone=emp.get("phone"),
         job_title=emp["job_title"],
         department_id=emp["department_id"],
@@ -1955,17 +2103,99 @@ async def update_my_employee_profile(data: EmployeeProfileUpdate, current_user: 
     return {"message": "Profile updated successfully"}
 
 @api_router.put("/employees/{emp_id}", response_model=EmployeeResponse)
-async def update_employee(emp_id: str, emp_data: EmployeeCreate, current_user: dict = Depends(require_manager)):
-    update_dict = emp_data.dict(exclude_unset=True)
+async def update_employee(emp_id: str, emp_data: EmployeeUpdate, current_user: dict = Depends(require_manager)):
+    employee = await db.employees.find_one({"id": emp_id})
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    update_dict = emp_data.dict(exclude_unset=True, exclude={"temporary_password"})
+
+    if update_dict.get("employee_id") and update_dict["employee_id"] != employee.get("employee_id"):
+        duplicate_employee_id = await db.employees.find_one({
+            "employee_id": update_dict["employee_id"],
+            "id": {"$ne": emp_id},
+        })
+        if duplicate_employee_id:
+            raise HTTPException(status_code=400, detail="Employee ID already exists")
+
+    if update_dict.get("email") and update_dict["email"].lower() != employee.get("email"):
+        duplicate_email = await db.employees.find_one({
+            "email": update_dict["email"].lower(),
+            "id": {"$ne": emp_id},
+        })
+        if duplicate_email:
+            raise HTTPException(status_code=400, detail="Employee email already exists")
+        existing_user_with_email = await db.users.find_one({"email": update_dict["email"].lower()})
+        if existing_user_with_email and existing_user_with_email["id"] != employee.get("user_id"):
+            raise HTTPException(status_code=400, detail="A user account with this email already exists")
+        update_dict["email"] = update_dict["email"].lower()
+
+    if "role" in update_dict and update_dict["role"] is not None:
+        update_dict["role"] = normalize_employee_role(update_dict["role"])
+
+    if "leave_balance" in update_dict and update_dict["leave_balance"] is not None:
+        update_dict["leave_balance"] = {
+            leave_type_id: max(0.0, float(balance_value))
+            for leave_type_id, balance_value in update_dict["leave_balance"].items()
+        }
+
     if "emergency_contact" in update_dict and update_dict["emergency_contact"]:
         update_dict["emergency_contact"] = update_dict["emergency_contact"]
     if "bank_info" in update_dict and update_dict["bank_info"]:
         update_dict["bank_info"] = update_dict["bank_info"]
+
+    merged = {**employee, **update_dict}
+    user_id = await ensure_employee_user_account(
+        employee_id=merged["id"],
+        email=merged["email"],
+        first_name=merged["first_name"],
+        last_name=merged["last_name"],
+        role=merged.get("role", "employee"),
+        temporary_password=emp_data.temporary_password,
+        existing_user_id=employee.get("user_id"),
+    )
+
+    update_dict["user_id"] = user_id
     update_dict["updated_at"] = datetime.utcnow()
-    
+
     await db.employees.update_one({"id": emp_id}, {"$set": update_dict})
-    await log_activity(current_user["id"], "employee_updated", f"Employee updated: {emp_data.first_name} {emp_data.last_name}")
-    
+    await log_activity(
+        current_user["id"],
+        "employee_updated",
+        f"Employee updated: {merged.get('first_name', employee.get('first_name', ''))} {merged.get('last_name', employee.get('last_name', ''))}"
+    )
+
+    return await get_employee(emp_id, current_user)
+
+@api_router.put("/employees/{emp_id}/leave-balance", response_model=EmployeeResponse)
+async def update_employee_leave_balance(
+    emp_id: str,
+    payload: EmployeeLeaveBalanceUpdate,
+    current_user: dict = Depends(require_admin)
+):
+    employee = await db.employees.find_one({"id": emp_id})
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    leave_types = await db.leave_types.find().to_list(100)
+    allowed_leave_type_ids = {lt["id"] for lt in leave_types}
+    updated_balance = dict(employee.get("leave_balance", {}))
+
+    for leave_type_id, balance_value in payload.leave_balance.items():
+        if leave_type_id not in allowed_leave_type_ids:
+            raise HTTPException(status_code=400, detail="Invalid leave type in balance update")
+        updated_balance[leave_type_id] = max(0.0, float(balance_value))
+
+    await db.employees.update_one(
+        {"id": emp_id},
+        {
+            "$set": {
+                "leave_balance": updated_balance,
+                "updated_at": datetime.utcnow(),
+            }
+        }
+    )
+    await log_activity(current_user["id"], "employee_leave_balance_updated", f"Leave balance updated for employee: {emp_id}")
     return await get_employee(emp_id, current_user)
 
 @api_router.delete("/employees/{emp_id}")
@@ -2135,8 +2365,8 @@ async def get_leave_requests(
             id=req["id"],
             employee_id=req["employee_id"],
             employee_name=employees.get(req["employee_id"]),
-            leave_type_id="time_off",
-            leave_type_name="Time Off",
+            leave_type_id=req.get("leave_type_id") or "time_off",
+            leave_type_name=req.get("leave_type_name") or leave_types.get(req.get("leave_type_id") or "time_off") or "Time Off",
             start_date=req["start_date"],
             end_date=req["end_date"],
             days_count=float(req.get("days_count", 1)),
@@ -2200,17 +2430,21 @@ async def get_my_leave_balance(current_user: dict = Depends(get_current_user)):
 async def update_leave_request(lr_id: str, update: LeaveRequestUpdate, current_user: dict = Depends(require_manager)):
     lr = await db.leave_requests.find_one({"id": lr_id})
     time_off_request = None
+    previous_status = None
 
     if not lr:
         time_off_request = await db.time_off_requests.find_one({"id": lr_id})
         if not time_off_request:
             raise HTTPException(status_code=404, detail="Leave request not found")
+        previous_status = map_time_off_status_to_leave_status(time_off_request.get("status", "pending"))
         lr = {
             "id": lr_id,
             "employee_id": time_off_request["employee_id"],
-            "leave_type_id": "time_off",
+            "leave_type_id": time_off_request.get("leave_type_id") or "time_off",
             "days_count": float(time_off_request.get("days_count", 1)),
         }
+    else:
+        previous_status = lr.get("status", "pending")
     
     update_dict = {
         "status": update.status,
@@ -2246,10 +2480,18 @@ async def update_leave_request(lr_id: str, update: LeaveRequestUpdate, current_u
                 }}
             )
     
-    if update.status == "approved":
+    leave_type_id = lr.get("leave_type_id")
+    should_track_balance = bool(leave_type_id and leave_type_id != "time_off")
+
+    if previous_status != "approved" and update.status == "approved" and should_track_balance:
         await db.employees.update_one(
             {"id": lr["employee_id"]},
             {"$inc": {f"leave_balance.{lr['leave_type_id']}": -lr["days_count"]}}
+        )
+    elif previous_status == "approved" and update.status != "approved" and should_track_balance:
+        await db.employees.update_one(
+            {"id": lr["employee_id"]},
+            {"$inc": {f"leave_balance.{lr['leave_type_id']}": lr["days_count"]}}
         )
     
     await log_activity(current_user["id"], f"leave_{update.status}", f"Leave request {update.status}")
@@ -3171,18 +3413,22 @@ async def seed_demo_data(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Only super admin can seed data")
 
     # Prevent duplicate huge seeds
-    existing_demo = await db.users.find_one({"email": "superadmin@test.com"})
-    if existing_demo:
+    existing_company_demo = await db.users.find_one({"email": "superadmin@company.com"})
+    if existing_company_demo:
         return {
             "message": "Demo data already seeded",
             "accounts": [
-                {"email": "superadmin@test.com", "password": "Test123!"},
-                {"email": "hr@test.com", "password": "Test123!"},
-                {"email": "manager@test.com", "password": "Test123!"},
-                {"email": "employee@test.com", "password": "Test123!"},
+                {"email": "superadmin@company.com", "password": "Test123!"},
+                {"email": "hr@company.com", "password": "Test123!"},
+                {"email": "manager@company.com", "password": "Test123!"},
+                {"email": "employee@company.com", "password": "Test123!"},
                 {"email": "employee2@test.com", "password": "Test123!"},
             ],
         }
+
+    legacy_demo = await db.users.find_one({"email": "superadmin@test.com"})
+    if legacy_demo:
+        await clear_demo_data()
 
     now = datetime.utcnow()
     test_password_hash = get_password_hash("Test123!")
@@ -3271,7 +3517,7 @@ async def seed_demo_data(current_user: dict = Depends(get_current_user)):
             "id": str(uuid.uuid4()),
             "name": "Annual Leave",
             "description": "Paid vacation days",
-            "days_per_year": 20,
+            "days_per_year": 10,
             "is_paid": True,
             "requires_approval": True,
             "color": "#3B82F6",
@@ -3289,19 +3535,29 @@ async def seed_demo_data(current_user: dict = Depends(get_current_user)):
         },
         {
             "id": str(uuid.uuid4()),
-            "name": "Personal Leave",
-            "description": "Personal time off",
-            "days_per_year": 5,
+            "name": "Maternity Leave",
+            "description": "Optional maternity leave balance",
+            "days_per_year": 0,
             "is_paid": True,
             "requires_approval": True,
-            "color": "#8B5CF6",
+            "color": "#EC4899",
+            "created_at": now,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "name": "Paternity Leave",
+            "description": "Optional paternity leave balance",
+            "days_per_year": 0,
+            "is_paid": True,
+            "requires_approval": True,
+            "color": "#14B8A6",
             "created_at": now,
         },
         {
             "id": str(uuid.uuid4()),
             "name": "Unpaid Leave",
             "description": "Leave without pay",
-            "days_per_year": 30,
+            "days_per_year": 0,
             "is_paid": False,
             "requires_approval": True,
             "color": "#6B7280",
@@ -3367,7 +3623,7 @@ async def seed_demo_data(current_user: dict = Depends(get_current_user)):
     # ===== Test Users + Linked Employees =====
     demo_people = [
         {
-            "email": "superadmin@test.com",
+            "email": "superadmin@company.com",
             "first_name": "Admin",
             "last_name": "Super",
             "role": "super_admin",
@@ -3377,7 +3633,7 @@ async def seed_demo_data(current_user: dict = Depends(get_current_user)):
             "employee_code": "EMP-SA01",
         },
         {
-            "email": "hr@test.com",
+            "email": "hr@company.com",
             "first_name": "Sarah",
             "last_name": "HR",
             "role": "hr_admin",
@@ -3387,7 +3643,7 @@ async def seed_demo_data(current_user: dict = Depends(get_current_user)):
             "employee_code": "EMP-HR01",
         },
         {
-            "email": "manager@test.com",
+            "email": "manager@company.com",
             "first_name": "Mike",
             "last_name": "Manager",
             "role": "manager",
@@ -3397,7 +3653,7 @@ async def seed_demo_data(current_user: dict = Depends(get_current_user)):
             "employee_code": "EMP-MG01",
         },
         {
-            "email": "employee@test.com",
+            "email": "employee@company.com",
             "first_name": "John",
             "last_name": "Employee",
             "role": "employee",
@@ -3496,6 +3752,7 @@ async def seed_demo_data(current_user: dict = Depends(get_current_user)):
             "first_name": person["first_name"],
             "last_name": person["last_name"],
             "email": person["email"],
+            "role": person["role"],
             "phone": f"+1-555-01{str(idx + 1).zfill(2)}",
             "job_title": person["job_title"],
             "department_id": person["department_id"],
@@ -3838,17 +4095,21 @@ async def seed_demo_data(current_user: dict = Depends(get_current_user)):
 @api_router.post("/seed-test-users")
 async def seed_test_users():
     """Seed test users for all roles - can be called without auth"""
-    existing = await db.users.find_one({"email": "superadmin@test.com"})
+    existing = await db.users.find_one({"email": "superadmin@company.com"})
     if existing:
         return {
             "message": "Test users already seeded",
             "users": [
-                {"email": "employee@test.com", "password": "Test123!"},
-                {"email": "hr@test.com", "password": "Test123!"},
-                {"email": "manager@test.com", "password": "Test123!"},
-                {"email": "superadmin@test.com", "password": "Test123!"},
+                {"email": "employee@company.com", "password": "Test123!"},
+                {"email": "hr@company.com", "password": "Test123!"},
+                {"email": "manager@company.com", "password": "Test123!"},
+                {"email": "superadmin@company.com", "password": "Test123!"},
             ],
         }
+
+    legacy_existing = await db.users.find_one({"email": "superadmin@test.com"})
+    if legacy_existing:
+        await clear_demo_data()
 
     # create minimal super admin first so you can log in and run /seed-data
     now = datetime.utcnow()
@@ -3880,6 +4141,64 @@ async def seed_test_users():
         }
         await db.departments.insert_one(eng_dept)
 
+    leave_types = await db.leave_types.find().to_list(100)
+    if not leave_types:
+        leave_types = [
+            {
+                "id": str(uuid.uuid4()),
+                "name": "Annual Leave",
+                "description": "Paid vacation days",
+                "days_per_year": 10,
+                "is_paid": True,
+                "requires_approval": True,
+                "color": "#3B82F6",
+                "created_at": now,
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "name": "Sick Leave",
+                "description": "Medical leave",
+                "days_per_year": 10,
+                "is_paid": True,
+                "requires_approval": True,
+                "color": "#EF4444",
+                "created_at": now,
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "name": "Maternity Leave",
+                "description": "Optional maternity leave balance",
+                "days_per_year": 0,
+                "is_paid": True,
+                "requires_approval": True,
+                "color": "#EC4899",
+                "created_at": now,
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "name": "Paternity Leave",
+                "description": "Optional paternity leave balance",
+                "days_per_year": 0,
+                "is_paid": True,
+                "requires_approval": True,
+                "color": "#14B8A6",
+                "created_at": now,
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "name": "Unpaid Leave",
+                "description": "Leave without pay",
+                "days_per_year": 0,
+                "is_paid": False,
+                "requires_approval": True,
+                "color": "#6B7280",
+                "created_at": now,
+            },
+        ]
+        await db.leave_types.insert_many(leave_types)
+
+    default_leave_balance = {lt["id"]: float(lt.get("days_per_year", 0)) for lt in leave_types}
+
     # Get or create a work location
     work_loc = await db.work_locations.find_one({})
     if not work_loc:
@@ -3898,28 +4217,28 @@ async def seed_test_users():
 
     test_users = [
         {
-            "email": "employee@test.com",
+            "email": "employee@company.com",
             "first_name": "John",
             "last_name": "Employee",
             "role": "employee",
             "department": eng_dept,
         },
         {
-            "email": "hr@test.com",
+            "email": "hr@company.com",
             "first_name": "Sarah",
             "last_name": "HR",
             "role": "hr_admin",
             "department": hr_dept,
         },
         {
-            "email": "manager@test.com",
+            "email": "manager@company.com",
             "first_name": "Mike",
             "last_name": "Manager",
             "role": "manager",
             "department": eng_dept,
         },
         {
-            "email": "superadmin@test.com",
+            "email": "superadmin@company.com",
             "first_name": "Admin",
             "last_name": "Super",
             "role": "super_admin",
@@ -3963,6 +4282,7 @@ async def seed_test_users():
             "first_name": user_data["first_name"],
             "last_name": user_data["last_name"],
             "email": user_data["email"],
+            "role": user_data["role"],
             "phone": "555-0100",
             "department_id": user_data["department"]["id"],
             "job_title": f"{user_data['role'].replace('_', ' ').title()}",
@@ -3972,7 +4292,7 @@ async def seed_test_users():
             "work_location_id": work_loc["id"],
             "work_location": "Office",
             "salary": 75000 if user_data["role"] == "employee" else 95000,
-            "leave_balance": {},
+            "leave_balance": default_leave_balance.copy(),
             "created_at": now,
             "updated_at": now,
         }
