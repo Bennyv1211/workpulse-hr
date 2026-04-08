@@ -563,6 +563,80 @@ async def log_activity(user_id: str, action: str, description: str, metadata: di
     }
     await db.activity_logs.insert_one(activity)
 
+def map_time_off_status_to_leave_status(status_value: str) -> str:
+    if status_value == "denied":
+        return "rejected"
+    return status_value
+
+def map_leave_status_to_time_off_status(status_value: str) -> str:
+    if status_value == "rejected":
+        return "denied"
+    return status_value
+
+async def sync_shift_clock_in_to_attendance(employee: dict, local_time: Optional[str], timezone: Optional[str], latitude: Optional[float], longitude: Optional[float], clock_in_time: datetime):
+    today = clock_in_time.strftime("%Y-%m-%d")
+    existing = await db.attendance.find_one({"employee_id": employee["id"], "date": today})
+
+    payload = {
+        "employee_id": employee["id"],
+        "date": today,
+        "clock_in": clock_in_time,
+        "clock_in_local": local_time,
+        "timezone": timezone,
+        "clock_in_location": {"latitude": latitude, "longitude": longitude} if latitude is not None and longitude is not None else None,
+        "status": "present",
+        "updated_at": datetime.utcnow(),
+    }
+
+    if existing:
+        await db.attendance.update_one({"id": existing["id"]}, {"$set": payload})
+        return existing["id"]
+
+    attendance_id = str(uuid.uuid4())
+    payload.update({
+        "id": attendance_id,
+        "clock_out": None,
+        "clock_out_local": None,
+        "clock_out_location": None,
+        "total_hours": 0,
+        "notes": None,
+        "created_at": datetime.utcnow(),
+    })
+    await db.attendance.insert_one(payload)
+    return attendance_id
+
+async def sync_shift_clock_out_to_attendance(employee: dict, local_time: Optional[str], timezone: Optional[str], latitude: Optional[float], longitude: Optional[float], clock_out_time: datetime, work_hours: float):
+    today = clock_out_time.strftime("%Y-%m-%d")
+    existing = await db.attendance.find_one({"employee_id": employee["id"], "date": today})
+
+    payload = {
+        "clock_out": clock_out_time,
+        "clock_out_local": local_time,
+        "timezone": timezone,
+        "clock_out_location": {"latitude": latitude, "longitude": longitude} if latitude is not None and longitude is not None else None,
+        "total_hours": work_hours,
+        "status": "present",
+        "updated_at": datetime.utcnow(),
+    }
+
+    if existing:
+        await db.attendance.update_one({"id": existing["id"]}, {"$set": payload})
+        return existing["id"]
+
+    attendance_id = str(uuid.uuid4())
+    payload.update({
+        "id": attendance_id,
+        "employee_id": employee["id"],
+        "date": today,
+        "clock_in": None,
+        "clock_in_local": None,
+        "clock_in_location": None,
+        "notes": None,
+        "created_at": datetime.utcnow(),
+    })
+    await db.attendance.insert_one(payload)
+    return attendance_id
+
 # ===== Authentication Routes =====
 @api_router.post("/auth/register", response_model=TokenResponse)
 async def register(user_data: UserCreate):
@@ -731,13 +805,14 @@ async def shift_clock_in(data: ShiftClockRequest, current_user: dict = Depends(g
         raise HTTPException(status_code=400, detail="You already have an active shift")
     
     shift_id = str(uuid.uuid4())
+    clock_in_time = datetime.utcnow()
     shift = {
         "id": shift_id,
         "employee_id": employee["id"],
         "date": today,
         "status": "working",
         "clock_in": {
-            "timestamp": datetime.utcnow(),
+            "timestamp": clock_in_time,
             "local_time": data.local_time,
             "timezone": data.timezone,
             "location": {"latitude": data.latitude, "longitude": data.longitude} if data.latitude else None
@@ -749,6 +824,14 @@ async def shift_clock_in(data: ShiftClockRequest, current_user: dict = Depends(g
     }
     
     await db.shifts.insert_one(shift)
+    await sync_shift_clock_in_to_attendance(
+        employee=employee,
+        local_time=data.local_time,
+        timezone=data.timezone,
+        latitude=data.latitude,
+        longitude=data.longitude,
+        clock_in_time=clock_in_time,
+    )
     await log_activity(current_user["id"], "shift_clock_in", f"Clocked in at {data.local_time}")
     
     return {
@@ -802,6 +885,15 @@ async def shift_clock_out(data: ShiftClockRequest, current_user: dict = Depends(
             "total_work_hours": work_hours,
             "updated_at": datetime.utcnow()
         }}
+    )
+    await sync_shift_clock_out_to_attendance(
+        employee=employee,
+        local_time=data.local_time,
+        timezone=data.timezone,
+        latitude=data.latitude,
+        longitude=data.longitude,
+        clock_out_time=clock_out_time,
+        work_hours=work_hours,
     )
     
     await log_activity(current_user["id"], "shift_clock_out", f"Clocked out. Worked {work_hours} hours")
@@ -1013,6 +1105,24 @@ async def create_time_off_request(data: TimeOffRequest, current_user: dict = Dep
     }
     
     await db.time_off_requests.insert_one(request)
+
+    mirrored_leave_request = {
+        "id": str(uuid.uuid4()),
+        "employee_id": employee["id"],
+        "leave_type_id": "time_off",
+        "start_date": data.start_date,
+        "end_date": data.end_date,
+        "days_count": float(days_count),
+        "reason": data.note,
+        "status": "pending",
+        "half_day": False,
+        "approved_by": None,
+        "approved_at": None,
+        "manager_comment": None,
+        "created_at": request["created_at"],
+        "source_time_off_request_id": request_id,
+    }
+    await db.leave_requests.insert_one(mirrored_leave_request)
     await log_activity(current_user["id"], "time_off_request", f"Requested {days_count} days off: {data.start_date} to {data.end_date}")
     
     return {
@@ -1042,6 +1152,7 @@ async def cancel_time_off_request(request_id: str, current_user: dict = Depends(
         raise HTTPException(status_code=400, detail="Can only cancel pending requests")
     
     await db.time_off_requests.delete_one({"id": request_id})
+    await db.leave_requests.delete_many({"source_time_off_request_id": request_id})
     await log_activity(current_user["id"], "time_off_cancelled", f"Cancelled time-off request")
     
     return {"message": "Request cancelled successfully"}
@@ -1234,14 +1345,17 @@ async def send_paystubs(payload: PaystubBulkSend, current_user: dict = Depends(r
 @api_router.get("/paystubs/{paystub_id}/download")
 async def download_paystub(paystub_id: str, token: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     """Download a paystub PDF"""
-    employee = await db.employees.find_one({"user_id": current_user["id"]})
-    if not employee:
-        employee = await db.employees.find_one({"email": current_user["email"]})
-    
-    paystub = await db.paystubs.find_one({
-        "id": paystub_id,
-        "employee_id": employee["id"] if employee else None
-    })
+    if current_user["role"] in ["super_admin", "hr_admin", "manager", "hr"]:
+        paystub = await db.paystubs.find_one({"id": paystub_id})
+    else:
+        employee = await db.employees.find_one({"user_id": current_user["id"]})
+        if not employee:
+            employee = await db.employees.find_one({"email": current_user["email"]})
+        
+        paystub = await db.paystubs.find_one({
+            "id": paystub_id,
+            "employee_id": employee["id"] if employee else None
+        })
     
     if not paystub:
         raise HTTPException(status_code=404, detail="Paystub not found")
@@ -1980,6 +2094,19 @@ async def get_leave_requests(
     leave_requests = await db.leave_requests.find(query).sort("created_at", -1).to_list(1000)
     employees = {e["id"]: f"{e['first_name']} {e['last_name']}" for e in await db.employees.find().to_list(1000)}
     leave_types = {lt["id"]: lt["name"] for lt in await db.leave_types.find().to_list(100)}
+    mirrored_time_off_ids = {
+        lr.get("source_time_off_request_id")
+        for lr in leave_requests
+        if lr.get("source_time_off_request_id")
+    }
+
+    time_off_query = {}
+    if status:
+        time_off_query["status"] = map_leave_status_to_time_off_status(status)
+    if query.get("employee_id"):
+        time_off_query["employee_id"] = query["employee_id"]
+
+    time_off_requests = await db.time_off_requests.find(time_off_query).sort("created_at", -1).to_list(1000)
     
     result = []
     for lr in leave_requests:
@@ -1988,7 +2115,7 @@ async def get_leave_requests(
             employee_id=lr["employee_id"],
             employee_name=employees.get(lr["employee_id"]),
             leave_type_id=lr["leave_type_id"],
-            leave_type_name=leave_types.get(lr["leave_type_id"]),
+            leave_type_name=leave_types.get(lr["leave_type_id"]) or lr.get("leave_type_name") or ("Time Off" if lr["leave_type_id"] == "time_off" else None),
             start_date=lr["start_date"],
             end_date=lr["end_date"],
             days_count=lr["days_count"],
@@ -2000,6 +2127,28 @@ async def get_leave_requests(
             manager_comment=lr.get("manager_comment"),
             created_at=lr["created_at"]
         ))
+
+    for req in time_off_requests:
+        if req["id"] in mirrored_time_off_ids:
+            continue
+        result.append(LeaveRequestResponse(
+            id=req["id"],
+            employee_id=req["employee_id"],
+            employee_name=employees.get(req["employee_id"]),
+            leave_type_id="time_off",
+            leave_type_name="Time Off",
+            start_date=req["start_date"],
+            end_date=req["end_date"],
+            days_count=float(req.get("days_count", 1)),
+            reason=req.get("note"),
+            status=map_time_off_status_to_leave_status(req["status"]),
+            half_day=False,
+            approved_by=req.get("approved_by"),
+            approved_at=req.get("approved_at"),
+            manager_comment=req.get("review_note"),
+            created_at=req["created_at"]
+        ))
+    result.sort(key=lambda x: x.created_at, reverse=True)
     return result
 
 @api_router.get("/leave-requests/my", response_model=List[LeaveRequestResponse])
@@ -2050,8 +2199,18 @@ async def get_my_leave_balance(current_user: dict = Depends(get_current_user)):
 @api_router.put("/leave-requests/{lr_id}", response_model=LeaveRequestResponse)
 async def update_leave_request(lr_id: str, update: LeaveRequestUpdate, current_user: dict = Depends(require_manager)):
     lr = await db.leave_requests.find_one({"id": lr_id})
+    time_off_request = None
+
     if not lr:
-        raise HTTPException(status_code=404, detail="Leave request not found")
+        time_off_request = await db.time_off_requests.find_one({"id": lr_id})
+        if not time_off_request:
+            raise HTTPException(status_code=404, detail="Leave request not found")
+        lr = {
+            "id": lr_id,
+            "employee_id": time_off_request["employee_id"],
+            "leave_type_id": "time_off",
+            "days_count": float(time_off_request.get("days_count", 1)),
+        }
     
     update_dict = {
         "status": update.status,
@@ -2060,7 +2219,32 @@ async def update_leave_request(lr_id: str, update: LeaveRequestUpdate, current_u
         "approved_at": datetime.utcnow()
     }
     
-    await db.leave_requests.update_one({"id": lr_id}, {"$set": update_dict})
+    if time_off_request:
+        await db.time_off_requests.update_one(
+            {"id": lr_id},
+            {"$set": {
+                "status": map_leave_status_to_time_off_status(update.status),
+                "review_note": update.manager_comment,
+                "approved_by": current_user["id"],
+                "approved_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+            }}
+        )
+    else:
+        await db.leave_requests.update_one({"id": lr_id}, {"$set": update_dict})
+
+        source_time_off_request_id = lr.get("source_time_off_request_id")
+        if source_time_off_request_id:
+            await db.time_off_requests.update_one(
+                {"id": source_time_off_request_id},
+                {"$set": {
+                    "status": map_leave_status_to_time_off_status(update.status),
+                    "review_note": update.manager_comment,
+                    "approved_by": current_user["id"],
+                    "approved_at": datetime.utcnow(),
+                    "updated_at": datetime.utcnow(),
+                }}
+            )
     
     if update.status == "approved":
         await db.employees.update_one(
@@ -2273,6 +2457,16 @@ async def get_attendance(
     
     records = await db.attendance.find(query).sort("date", -1).to_list(1000)
     employees = {e["id"]: f"{e['first_name']} {e['last_name']}" for e in await db.employees.find().to_list(1000)}
+    active_shift_query = {"status": {"$in": ["working", "on_break"]}}
+    if query.get("employee_id"):
+        active_shift_query["employee_id"] = query["employee_id"]
+    if start_date and end_date and start_date == end_date:
+        active_shift_query["date"] = start_date
+    active_shifts = await db.shifts.find(active_shift_query).to_list(1000)
+    active_shift_map = {
+        (shift["employee_id"], shift["date"]): shift
+        for shift in active_shifts
+    }
     
     return [
         AttendanceResponse(
@@ -2284,7 +2478,33 @@ async def get_attendance(
             clock_out=r.get("clock_out"),
             clock_in_location=r.get("clock_in_location"),
             clock_out_location=r.get("clock_out_location"),
-            total_hours=r.get("total_hours"),
+            total_hours=(
+                r.get("total_hours")
+                if r.get("total_hours") not in [None, 0] or r.get("clock_out")
+                else round(
+                    max(
+                        0,
+                        (
+                            datetime.utcnow()
+                            - (
+                                active_shift_map.get((r["employee_id"], r["date"]), {}).get("clock_in", {}).get("timestamp")
+                                if active_shift_map.get((r["employee_id"], r["date"]))
+                                else r.get("clock_in")
+                            )
+                        ).total_seconds()
+                        - active_shift_map.get((r["employee_id"], r["date"]), {}).get("total_break_seconds", 0)
+                    ) / 3600,
+                    2,
+                )
+                if (
+                    not r.get("clock_out")
+                    and (
+                        active_shift_map.get((r["employee_id"], r["date"]), {}).get("clock_in", {}).get("timestamp")
+                        or r.get("clock_in")
+                    )
+                )
+                else r.get("total_hours")
+            ),
             status=r["status"],
             notes=r.get("notes"),
             created_at=r["created_at"]
