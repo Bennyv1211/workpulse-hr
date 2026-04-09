@@ -1,6 +1,7 @@
 import React from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import { isHrRole } from '../lib/roles'
 import {
   LayoutDashboard,
   Users,
@@ -12,23 +13,34 @@ import {
   LogOut,
   Menu,
   X,
-  Bell
+  Bell,
+  ReceiptText
 } from 'lucide-react'
-
-const navigation = [
-  { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-  { name: 'Employees', href: '/dashboard/employees', icon: Users },
-  { name: 'Leave Requests', href: '/dashboard/leave', icon: Calendar },
-  { name: 'Attendance', href: '/dashboard/attendance', icon: Clock },
-  { name: 'Payroll', href: '/dashboard/payroll', icon: DollarSign },
-  { name: 'Reports', href: '/dashboard/reports', icon: BarChart3 },
-  { name: 'Settings', href: '/dashboard/settings', icon: Settings },
-]
 
 export default function Layout() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
   const [sidebarOpen, setSidebarOpen] = React.useState(false)
+
+  const hrUser = isHrRole(user?.role)
+
+  const navigation = hrUser
+    ? [
+        { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+        { name: 'Employees', href: '/dashboard/employees', icon: Users },
+        { name: 'Leave Requests', href: '/dashboard/leave', icon: Calendar },
+        { name: 'Attendance', href: '/dashboard/attendance', icon: Clock },
+        { name: 'Payroll', href: '/dashboard/payroll', icon: DollarSign },
+        { name: 'Paystubs', href: '/dashboard/paystubs', icon: ReceiptText },
+        { name: 'Reports', href: '/dashboard/reports', icon: BarChart3 },
+        { name: 'Settings', href: '/dashboard/settings', icon: Settings },
+      ]
+    : [
+        { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+        { name: 'Leave Requests', href: '/dashboard/leave', icon: Calendar },
+        { name: 'Attendance', href: '/dashboard/attendance', icon: Clock },
+        { name: 'Settings', href: '/dashboard/settings', icon: Settings },
+      ]
 
   const handleLogout = () => {
     logout()
@@ -37,7 +49,6 @@ export default function Layout() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Mobile sidebar backdrop */}
       {sidebarOpen && (
         <div
           className="fixed inset-0 bg-black/50 z-40 lg:hidden"
@@ -45,12 +56,10 @@ export default function Layout() {
         />
       )}
 
-      {/* Sidebar */}
       <aside className={`fixed top-0 left-0 z-50 h-screen w-64 bg-white border-r border-gray-200 transform transition-transform duration-200 lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="flex flex-col h-full">
-          {/* Logo */}
           <div className="flex items-center gap-3 px-6 py-5 border-b border-gray-100">
-            <img src="/emplora-wordmark.svg" alt="Emplora" className="h-10 w-auto" />
+            <img src="/emplora-wordmark.svg" alt="WorkPulse HR" className="h-10 w-auto" />
             <button
               className="ml-auto lg:hidden"
               onClick={() => setSidebarOpen(false)}
@@ -59,16 +68,13 @@ export default function Layout() {
             </button>
           </div>
 
-          {/* Navigation */}
           <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
             {navigation.map((item) => (
               <NavLink
                 key={item.name}
                 to={item.href}
                 end={item.href === '/dashboard'}
-                className={({ isActive }) =>
-                  `sidebar-link ${isActive ? 'active' : ''}`
-                }
+                className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
                 onClick={() => setSidebarOpen(false)}
               >
                 <item.icon className="w-5 h-5" />
@@ -77,7 +83,6 @@ export default function Layout() {
             ))}
           </nav>
 
-          {/* User section */}
           <div className="p-4 border-t border-gray-100">
             <div className="flex items-center gap-3 mb-3">
               <div className="w-10 h-10 bg-primary-100 rounded-full flex items-center justify-center">
@@ -105,18 +110,22 @@ export default function Layout() {
         </div>
       </aside>
 
-      {/* Main content */}
       <div className="lg:pl-64">
-        {/* Top header */}
         <header className="sticky top-0 z-30 bg-white border-b border-gray-200">
           <div className="flex items-center justify-between px-4 py-4 sm:px-6">
-            <button
-              className="lg:hidden"
-              onClick={() => setSidebarOpen(true)}
-            >
+            <button className="lg:hidden" onClick={() => setSidebarOpen(true)}>
               <Menu className="w-6 h-6 text-gray-600" />
             </button>
-            <div className="flex-1" />
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-slate-900">
+                {hrUser ? 'HR Control Center' : 'Manager Control Center'}
+              </p>
+              <p className="text-xs text-slate-500">
+                {hrUser
+                  ? 'Employees, payroll, paystubs, leave, and backups in one place.'
+                  : 'Live team visibility, attendance, and leave approvals.'}
+              </p>
+            </div>
             <div className="flex items-center gap-4">
               <button className="relative p-2 text-gray-500 hover:bg-gray-100 rounded-lg">
                 <Bell className="w-5 h-5" />
@@ -141,7 +150,6 @@ export default function Layout() {
           </div>
         </header>
 
-        {/* Page content */}
         <main className="p-4 sm:p-6">
           <Outlet />
         </main>

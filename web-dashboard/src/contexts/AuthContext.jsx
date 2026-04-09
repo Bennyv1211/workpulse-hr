@@ -1,5 +1,6 @@
-import React, { createContext, useContext, useState, useEffect } from 'react'
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import api from '../lib/api'
+import { canAccessWebDashboard, isHrRole } from '../lib/roles'
 
 const AuthContext = createContext(null)
 
@@ -11,19 +12,29 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     if (token) {
       fetchUser()
-    } else {
-      setLoading(false)
+      return
     }
+    setLoading(false)
   }, [token])
+
+  const clearSession = () => {
+    localStorage.removeItem('token')
+    localStorage.removeItem('remember_me')
+    setToken(null)
+    setUser(null)
+  }
 
   const fetchUser = async () => {
     try {
       const response = await api.get('/auth/me')
-      setUser(response.data)
+      const userData = response.data
+      if (!canAccessWebDashboard(userData.role)) {
+        clearSession()
+        throw new Error('This web dashboard is only available for HR and managers.')
+      }
+      setUser(userData)
     } catch (error) {
-      console.error('Auth error:', error)
-      localStorage.removeItem('token')
-      setToken(null)
+      clearSession()
     } finally {
       setLoading(false)
     }
@@ -32,28 +43,61 @@ export function AuthProvider({ children }) {
   const login = async (email, password, rememberMe = false) => {
     const response = await api.post('/auth/login', { email, password, remember_me: rememberMe })
     const { access_token, user: userData } = response.data
+
+    if (!canAccessWebDashboard(userData.role)) {
+      throw new Error('This sign-in is only for HR and managers.')
+    }
+
     localStorage.setItem('token', access_token)
     if (rememberMe) {
       localStorage.setItem('remember_me', 'true')
     } else {
       localStorage.removeItem('remember_me')
     }
+
+    setToken(access_token)
+    setUser(userData)
+    return userData
+  }
+
+  const registerHr = async ({ email, password, first_name, last_name }) => {
+    const response = await api.post('/auth/register', {
+      email,
+      password,
+      first_name,
+      last_name,
+      role: 'hr_admin',
+    })
+
+    const { access_token, user: userData } = response.data
+    if (!isHrRole(userData.role)) {
+      throw new Error('Only HR accounts can be created from the web dashboard.')
+    }
+
+    localStorage.setItem('token', access_token)
     setToken(access_token)
     setUser(userData)
     return userData
   }
 
   const logout = () => {
-    localStorage.removeItem('token')
-    setToken(null)
-    setUser(null)
+    clearSession()
   }
 
-  return (
-    <AuthContext.Provider value={{ user, token, loading, login, logout }}>
-      {children}
-    </AuthContext.Provider>
+  const value = useMemo(
+    () => ({
+      user,
+      token,
+      loading,
+      login,
+      logout,
+      registerHr,
+      isHr: isHrRole(user?.role),
+    }),
+    [loading, token, user]
   )
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
 export function useAuth() {

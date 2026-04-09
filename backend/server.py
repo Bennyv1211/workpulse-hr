@@ -21,6 +21,9 @@ import base64
 from math import radians, cos, sin, asin, sqrt
 import asyncio
 from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.lib.units import inch
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -105,38 +108,118 @@ async def require_manager(current_user: dict = Depends(get_current_user)):
     return current_user
 
 # ===== Pydantic Models =====
-def make_pdf_bytes(employee_name: str, employee_code: str, pay_period_start: str, pay_period_end: str, pay_date: str, gross_pay: float, net_pay: float) -> bytes:
+def make_pdf_bytes(
+    employee_name: str,
+    employee_code: str,
+    pay_period_start: str,
+    pay_period_end: str,
+    pay_date: str,
+    gross_pay: float,
+    net_pay: float,
+    basic_pay: float = 0,
+    overtime_pay: float = 0,
+    bonus: float = 0,
+    tax: float = 0,
+    deductions: float = 0,
+    benefits_deduction: float = 0,
+    department_name: Optional[str] = None,
+    job_title: Optional[str] = None,
+) -> bytes:
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=letter)
     width, height = letter
+    logo_path = ROOT_DIR.parent / "frontend" / "assets" / "images" / "icon.png"
 
-    y = height - 60
-    c.setFont("Helvetica-Bold", 18)
-    c.drawString(50, y, "Emplora Paystub")
+    def draw_money(value: float) -> str:
+        return f"${float(value or 0):,.2f}"
 
-    y -= 30
-    c.setFont("Helvetica", 11)
-    c.drawString(50, y, f"Employee: {employee_name}")
-    y -= 18
-    c.drawString(50, y, f"Employee ID: {employee_code}")
-    y -= 18
-    c.drawString(50, y, f"Pay Period: {pay_period_start} to {pay_period_end}")
-    y -= 18
-    c.drawString(50, y, f"Pay Date: {pay_date}")
-    y -= 30
+    def draw_row(y_pos: float, label: str, value: str, bold: bool = False):
+        c.setFont("Helvetica-Bold" if bold else "Helvetica", 10.5)
+        c.setFillColor(colors.HexColor("#334155"))
+        c.drawString(55, y_pos, label)
+        c.drawRightString(width - 55, y_pos, value)
+
+    c.setFillColor(colors.HexColor("#0F172A"))
+    c.setStrokeColor(colors.HexColor("#E2E8F0"))
+
+    if logo_path.exists():
+        try:
+            c.drawImage(ImageReader(str(logo_path)), 50, height - 92, width=42, height=42, mask="auto")
+        except Exception:
+            pass
+
+    c.setFont("Helvetica-Bold", 19)
+    c.drawString(102, height - 58, "WorkPulse HR Paystub")
+    c.setFont("Helvetica", 10)
+    c.setFillColor(colors.HexColor("#64748B"))
+    c.drawString(102, height - 74, "Official earnings statement")
+
+    c.setFillColor(colors.HexColor("#2563EB"))
+    c.roundRect(width - 180, height - 88, 125, 36, 12, stroke=0, fill=1)
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 11)
+    c.drawCentredString(width - 117, height - 66, f"Pay Date {pay_date}")
+
+    c.setFillColor(colors.HexColor("#FFFFFF"))
+    c.roundRect(45, height - 208, width - 90, 92, 18, stroke=1, fill=1)
+
+    c.setFillColor(colors.HexColor("#0F172A"))
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(60, height - 138, "Employee")
+    c.drawString(305, height - 138, "Pay Period")
+
+    c.setFont("Helvetica", 10.5)
+    c.setFillColor(colors.HexColor("#334155"))
+    c.drawString(60, height - 156, employee_name)
+    c.drawString(60, height - 172, f"Employee ID: {employee_code}")
+    if department_name:
+        c.drawString(60, height - 188, f"Department: {department_name}")
+    elif job_title:
+        c.drawString(60, height - 188, f"Job Title: {job_title}")
+
+    c.drawString(305, height - 156, f"Start: {pay_period_start}")
+    c.drawString(305, height - 172, f"End: {pay_period_end}")
+    if job_title and department_name:
+        c.drawString(305, height - 188, f"Job Title: {job_title}")
+
+    c.roundRect(45, height - 455, (width - 105) / 2, 215, 18, stroke=1, fill=1)
+    c.roundRect(60 + (width - 105) / 2, height - 455, (width - 105) / 2, 215, 18, stroke=1, fill=1)
 
     c.setFont("Helvetica-Bold", 12)
-    c.drawString(50, y, "Earnings")
-    y -= 22
+    c.setFillColor(colors.HexColor("#0F172A"))
+    c.drawString(60, height - 265, "Earnings")
+    c.drawString(60 + (width - 105) / 2 + 15, height - 265, "Deductions")
 
-    c.setFont("Helvetica", 11)
-    c.drawString(50, y, f"Gross Pay: ${gross_pay:,.2f}")
-    y -= 18
-    c.drawString(50, y, f"Net Pay: ${net_pay:,.2f}")
+    earnings_x_right = 45 + (width - 105) / 2 - 15
+    deductions_left = 60 + (width - 105) / 2 + 15
+    deductions_right = width - 60
 
-    y -= 40
-    c.setFont("Helvetica-Oblique", 10)
-    c.drawString(50, y, "Demo paystub generated for testing.")
+    def draw_right_row(y_pos: float, label: str, value: str, bold: bool = False):
+        c.setFont("Helvetica-Bold" if bold else "Helvetica", 10.5)
+        c.setFillColor(colors.HexColor("#334155"))
+        c.drawString(deductions_left, y_pos, label)
+        c.drawRightString(deductions_right, y_pos, value)
+
+    draw_row(height - 290, "Basic Pay", draw_money(basic_pay))
+    draw_row(height - 312, "Overtime Pay", draw_money(overtime_pay))
+    draw_row(height - 334, "Bonus", draw_money(bonus))
+    draw_row(height - 366, "Gross Pay", draw_money(gross_pay), bold=True)
+
+    draw_right_row(height - 290, "Tax", draw_money(tax))
+    draw_right_row(height - 312, "Deductions", draw_money(deductions))
+    draw_right_row(height - 334, "Benefits", draw_money(benefits_deduction))
+    draw_right_row(height - 366, "Total Deductions", draw_money(tax + deductions + benefits_deduction), bold=True)
+
+    c.setFillColor(colors.HexColor("#DBEAFE"))
+    c.roundRect(45, height - 530, width - 90, 54, 18, stroke=0, fill=1)
+    c.setFillColor(colors.HexColor("#1E3A8A"))
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(62, height - 500, "Net Pay")
+    c.drawRightString(width - 60, height - 500, draw_money(net_pay))
+
+    c.setFillColor(colors.HexColor("#64748B"))
+    c.setFont("Helvetica-Oblique", 9.5)
+    c.drawString(50, 34, "Generated by WorkPulse HR. This paystub is intended for employee payroll records.")
 
     c.showPage()
     c.save()
@@ -198,6 +281,26 @@ async def clear_demo_data():
     await db.departments.delete_many({"demo_seed": True})
     await db.work_locations.delete_many({"demo_seed": True})
     await db.notifications.delete_many({"demo_seed": True})
+
+
+def serialize_backup_value(value: Any):
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, ObjectId):
+        return str(value)
+    if isinstance(value, bytes):
+        return "<binary>"
+    if isinstance(value, list):
+        return [serialize_backup_value(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: serialize_backup_value(item)
+            for key, item in value.items()
+            if key not in {"_id", "pdf_content"}
+        }
+    return value
 # User/Auth Models
 class UserCreate(BaseModel):
     email: EmailStr
@@ -374,6 +477,9 @@ class EmployeeResponse(BaseModel):
     skills: Optional[List[str]] = []
     notes: Optional[str] = None
     leave_balance: Optional[Dict[str, float]] = None
+    leave_balance_hours: Optional[float] = None
+    vacation_balance_hours: Optional[float] = None
+    sick_balance_hours: Optional[float] = None
     created_at: datetime
 
 # Leave Type Models
@@ -613,6 +719,137 @@ def map_leave_status_to_time_off_status(status_value: str) -> str:
     if status_value == "rejected":
         return "denied"
     return status_value
+
+async def ensure_core_leave_types() -> List[dict]:
+    core_leave_types = [
+        ("Annual Leave", "Paid vacation days", 10.0, True, "#3B82F6"),
+        ("Sick Leave", "Medical leave", 10.0, True, "#EF4444"),
+        ("Maternity Leave", "Optional maternity leave balance", 0.0, True, "#EC4899"),
+        ("Paternity Leave", "Optional paternity leave balance", 0.0, True, "#14B8A6"),
+        ("Unpaid Leave", "Leave without pay", 0.0, False, "#6B7280"),
+    ]
+
+    existing = await db.leave_types.find().to_list(100)
+    existing_by_name = {lt["name"]: lt for lt in existing}
+    created_any = False
+
+    for name, description, days_per_year, is_paid, color in core_leave_types:
+        if name in existing_by_name:
+            continue
+        created_any = True
+        leave_type = {
+            "id": str(uuid.uuid4()),
+            "name": name,
+            "description": description,
+            "days_per_year": days_per_year,
+            "is_paid": is_paid,
+            "requires_approval": True,
+            "color": color,
+            "created_at": datetime.utcnow(),
+        }
+        await db.leave_types.insert_one(leave_type)
+        existing.append(leave_type)
+
+    if created_any:
+        existing.sort(key=lambda item: item["name"])
+
+    return existing
+
+def summarize_leave_balance(employee: dict, leave_types: List[dict]) -> dict:
+    stored_balance = employee.get("leave_balance") or {}
+    use_defaults = len(stored_balance) == 0
+
+    total_hours = 0.0
+    vacation_hours = 0.0
+    sick_hours = 0.0
+    normalized_balance: Dict[str, float] = {}
+    name_aliases = {
+        "annual": "Annual Leave",
+        "annualleave": "Annual Leave",
+        "vacation": "Annual Leave",
+        "vacationleave": "Annual Leave",
+        "paidleave": "Annual Leave",
+        "sick": "Sick Leave",
+        "sickleave": "Sick Leave",
+        "medicalleave": "Sick Leave",
+        "maternity": "Maternity Leave",
+        "maternityleave": "Maternity Leave",
+        "paternity": "Paternity Leave",
+        "paternityleave": "Paternity Leave",
+        "unpaid": "Unpaid Leave",
+        "unpaidleave": "Unpaid Leave",
+    }
+    leave_type_by_id = {leave_type["id"]: leave_type for leave_type in leave_types}
+    resolved_by_name: Dict[str, float] = {}
+
+    def normalize_balance_key(value: str) -> str:
+        return re.sub(r"[^a-z]", "", str(value).strip().lower())
+
+    for key, value in stored_balance.items():
+        try:
+            numeric_value = max(0.0, float(value))
+        except (TypeError, ValueError):
+            continue
+
+        matched_leave_type = leave_type_by_id.get(key)
+        if matched_leave_type:
+            resolved_by_name[matched_leave_type["name"]] = numeric_value
+            continue
+
+        normalized_key = normalize_balance_key(key)
+        matched_name = next(
+            (
+                leave_type["name"]
+                for leave_type in leave_types
+                if normalize_balance_key(leave_type["name"]) == normalized_key
+            ),
+            name_aliases.get(normalized_key),
+        )
+
+        if matched_name:
+            resolved_by_name[matched_name] = numeric_value
+
+    direct_match_count = sum(1 for key in stored_balance if key in leave_type_by_id)
+    ordered_legacy_values: List[float] = []
+    if stored_balance and direct_match_count == 0 and not resolved_by_name:
+        for value in stored_balance.values():
+            try:
+                ordered_legacy_values.append(max(0.0, float(value)))
+            except (TypeError, ValueError):
+                continue
+
+    for index, leave_type in enumerate(leave_types):
+        days = float(
+            stored_balance.get(
+                leave_type["id"],
+                leave_type.get("days_per_year", 0) if use_defaults else 0,
+            )
+        )
+
+        if leave_type["id"] not in stored_balance and leave_type["name"] in resolved_by_name:
+            days = resolved_by_name[leave_type["name"]]
+        elif (
+            leave_type["id"] not in stored_balance
+            and leave_type["name"] not in resolved_by_name
+            and index < len(ordered_legacy_values)
+        ):
+            # Older demo data stored balances against pre-reset leave type IDs.
+            days = ordered_legacy_values[index]
+
+        normalized_balance[leave_type["id"]] = days
+        total_hours += days * 8
+
+        if leave_type["name"] == "Annual Leave":
+            vacation_hours = days * 8
+        if leave_type["name"] == "Sick Leave":
+            sick_hours = days * 8
+
+    return {
+        "leave_balance": normalized_balance,
+        "leave_balance_hours": round(total_hours, 2),
+        "vacation_balance_hours": round(vacation_hours, 2),
+        "sick_balance_hours": round(sick_hours, 2),
+    }
 
 def normalize_employee_role(role: Optional[str]) -> str:
     allowed_roles = {"employee", "manager", "hr_admin", "hr", "super_admin"}
@@ -1293,6 +1530,16 @@ async def upsert_paystub(payload: PaystubCreate, current_user: dict) -> dict:
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
 
+    payroll_record = None
+    if payload.payroll_id:
+        payroll_record = await db.payroll.find_one({"id": payload.payroll_id})
+
+    department_name = None
+    if employee.get("department_id"):
+        department = await db.departments.find_one({"id": employee["department_id"]})
+        if department:
+            department_name = department.get("name")
+
     pay_date = payload.pay_date or datetime.utcnow().strftime("%Y-%m-%d")
     employee_name = f"{employee.get('first_name', '')} {employee.get('last_name', '')}".strip() or "Employee"
     employee_code = employee.get("employee_id", payload.employee_id)
@@ -1304,6 +1551,14 @@ async def upsert_paystub(payload: PaystubCreate, current_user: dict) -> dict:
         pay_date=pay_date,
         gross_pay=payload.gross_pay,
         net_pay=payload.net_pay,
+        basic_pay=(payroll_record or {}).get("basic_salary", max(0, payload.gross_pay - payload.bonus)),
+        overtime_pay=(payroll_record or {}).get("overtime_pay", 0),
+        bonus=payload.bonus,
+        tax=payload.tax,
+        deductions=payload.deductions,
+        benefits_deduction=payload.benefits_deduction,
+        department_name=department_name,
+        job_title=employee.get("job_title"),
     )
 
     existing_paystub = None
@@ -1375,7 +1630,7 @@ async def get_paystubs(current_user: dict = Depends(get_current_user)):
         return []
     
     paystubs = await db.paystubs.find(
-        {"employee_id": employee["id"]}
+        {"employee_id": employee["id"], "published": True}
     ).sort("pay_date", -1).to_list(100)
     
     return [{
@@ -1385,7 +1640,8 @@ async def get_paystubs(current_user: dict = Depends(get_current_user)):
         "pay_date": p["pay_date"],
         "gross_pay": p.get("gross_pay", 0),
         "net_pay": p.get("net_pay", 0),
-        "pdf_filename": p.get("pdf_filename", "Paystub.pdf")
+        "pdf_filename": p.get("pdf_filename", "Paystub.pdf"),
+        "published": p.get("published", False),
     } for p in paystubs]
 
 @api_router.post("/paystubs")
@@ -1788,11 +2044,12 @@ async def create_employee(emp: EmployeeCreate, current_user: dict = Depends(requ
         if manager:
             manager_name = f"{manager['first_name']} {manager['last_name']}"
     
-    leave_types = await db.leave_types.find().to_list(100)
+    leave_types = await ensure_core_leave_types()
     leave_balance = {lt["id"]: lt["days_per_year"] for lt in leave_types}
     if emp.leave_balance:
         for leave_type_id, balance_value in emp.leave_balance.items():
             leave_balance[leave_type_id] = max(0.0, float(balance_value))
+    leave_balance_summary = summarize_leave_balance({"leave_balance": leave_balance}, leave_types)
 
     user_id = await ensure_employee_user_account(
         employee_id=emp_id,
@@ -1834,7 +2091,7 @@ async def create_employee(emp: EmployeeCreate, current_user: dict = Depends(requ
         "hourly_rate": emp.hourly_rate,
         "skills": emp.skills or [],
         "notes": emp.notes,
-        "leave_balance": leave_balance,
+        "leave_balance": leave_balance_summary["leave_balance"],
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow()
     }
@@ -1873,7 +2130,10 @@ async def create_employee(emp: EmployeeCreate, current_user: dict = Depends(requ
         hourly_rate=emp.hourly_rate,
         skills=emp.skills,
         notes=emp.notes,
-        leave_balance=leave_balance,
+        leave_balance=leave_balance_summary["leave_balance"],
+        leave_balance_hours=leave_balance_summary["leave_balance_hours"],
+        vacation_balance_hours=leave_balance_summary["vacation_balance_hours"],
+        sick_balance_hours=leave_balance_summary["sick_balance_hours"],
         created_at=employee["created_at"]
     )
 
@@ -1899,10 +2159,12 @@ async def get_employees(
     
     employees = await db.employees.find(query).to_list(1000)
     departments = {d["id"]: d["name"] for d in await db.departments.find().to_list(100)}
+    leave_types = await ensure_core_leave_types()
     emp_names = {e["id"]: f"{e['first_name']} {e['last_name']}" for e in employees}
     
     result = []
     for emp in employees:
+        leave_balance_summary = summarize_leave_balance(emp, leave_types)
         result.append(EmployeeResponse(
             id=emp["id"],
             user_id=emp.get("user_id"),
@@ -1935,7 +2197,10 @@ async def get_employees(
             hourly_rate=emp.get("hourly_rate"),
             skills=emp.get("skills", []),
             notes=emp.get("notes"),
-            leave_balance=emp.get("leave_balance"),
+            leave_balance=leave_balance_summary["leave_balance"],
+            leave_balance_hours=leave_balance_summary["leave_balance_hours"],
+            vacation_balance_hours=leave_balance_summary["vacation_balance_hours"],
+            sick_balance_hours=leave_balance_summary["sick_balance_hours"],
             created_at=emp["created_at"]
         ))
     return result
@@ -1947,6 +2212,8 @@ async def get_employee(emp_id: str, current_user: dict = Depends(get_current_use
         raise HTTPException(status_code=404, detail="Employee not found")
     
     dept = await db.departments.find_one({"id": emp["department_id"]})
+    leave_types = await ensure_core_leave_types()
+    leave_balance_summary = summarize_leave_balance(emp, leave_types)
     dept_name = dept["name"] if dept else None
     
     manager_name = None
@@ -1987,7 +2254,10 @@ async def get_employee(emp_id: str, current_user: dict = Depends(get_current_use
         hourly_rate=emp.get("hourly_rate"),
         skills=emp.get("skills", []),
         notes=emp.get("notes"),
-        leave_balance=emp.get("leave_balance"),
+        leave_balance=leave_balance_summary["leave_balance"],
+        leave_balance_hours=leave_balance_summary["leave_balance_hours"],
+        vacation_balance_hours=leave_balance_summary["vacation_balance_hours"],
+        sick_balance_hours=leave_balance_summary["sick_balance_hours"],
         created_at=emp["created_at"]
     )
 
@@ -2177,7 +2447,7 @@ async def update_employee_leave_balance(
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
 
-    leave_types = await db.leave_types.find().to_list(100)
+    leave_types = await ensure_core_leave_types()
     allowed_leave_type_ids = {lt["id"] for lt in leave_types}
     updated_balance = dict(employee.get("leave_balance", {}))
 
@@ -2227,7 +2497,7 @@ async def create_leave_type(lt: LeaveTypeCreate, current_user: dict = Depends(re
 
 @api_router.get("/leave-types", response_model=List[LeaveTypeResponse])
 async def get_leave_types(current_user: dict = Depends(get_current_user)):
-    leave_types = await db.leave_types.find().to_list(100)
+    leave_types = await ensure_core_leave_types()
     return [LeaveTypeResponse(**lt) for lt in leave_types]
 
 @api_router.put("/leave-types/{lt_id}", response_model=LeaveTypeResponse)
@@ -2316,14 +2586,18 @@ async def get_leave_requests(
     
     if current_user["role"] == "employee":
         employee = await db.employees.find_one({"user_id": current_user["id"]})
+        if not employee:
+            employee = await db.employees.find_one({"email": current_user["email"]})
         if employee:
             query["employee_id"] = employee["id"]
+        else:
+            return []
     elif employee_id:
         query["employee_id"] = employee_id
     
     leave_requests = await db.leave_requests.find(query).sort("created_at", -1).to_list(1000)
     employees = {e["id"]: f"{e['first_name']} {e['last_name']}" for e in await db.employees.find().to_list(1000)}
-    leave_types = {lt["id"]: lt["name"] for lt in await db.leave_types.find().to_list(100)}
+    leave_types = {lt["id"]: lt["name"] for lt in await ensure_core_leave_types()}
     mirrored_time_off_ids = {
         lr.get("source_time_off_request_id")
         for lr in leave_requests
@@ -2403,27 +2677,23 @@ async def get_my_leave_balance(current_user: dict = Depends(get_current_user)):
             "details": {}
         }
 
-    leave_balance = employee.get("leave_balance", {})
-    leave_types = await db.leave_types.find().to_list(100)
+    leave_types = await ensure_core_leave_types()
+    leave_balance_summary = summarize_leave_balance(employee, leave_types)
 
     details = {}
-    total_days = 0.0
 
     for lt in leave_types:
-        days = float(leave_balance.get(lt["id"], 0))
+        days = float(leave_balance_summary["leave_balance"].get(lt["id"], 0))
         details[lt["name"]] = {
             "days": days,
             "hours": round(days * 8, 2),
             "leave_type_id": lt["id"],
         }
-        total_days += days
-
-    total_hours = round(total_days * 8, 2)
 
     return {
-        "leave_balance_hours": total_hours,
-        "balance_hours": total_hours,
-        "available_hours": total_hours,
+        "leave_balance_hours": leave_balance_summary["leave_balance_hours"],
+        "balance_hours": leave_balance_summary["leave_balance_hours"],
+        "available_hours": leave_balance_summary["leave_balance_hours"],
         "details": details,
     }
 @api_router.put("/leave-requests/{lr_id}", response_model=LeaveRequestResponse)
@@ -3287,6 +3557,45 @@ async def export_my_data(current_user: dict = Depends(get_current_user)):
     
     return data
 
+
+@api_router.get("/admin/backup")
+async def export_admin_backup(current_user: dict = Depends(require_admin)):
+    collection_names = [
+        "users",
+        "employees",
+        "departments",
+        "work_locations",
+        "leave_types",
+        "leave_requests",
+        "time_off_requests",
+        "attendance",
+        "shifts",
+        "payroll",
+        "paystubs",
+        "announcements",
+        "notifications",
+        "activity_logs",
+    ]
+
+    backup_data = {
+        "generated_at": datetime.utcnow().isoformat(),
+        "generated_by": {
+            "id": current_user["id"],
+            "email": current_user["email"],
+            "role": current_user["role"],
+        },
+        "collections": {},
+    }
+
+    for collection_name in collection_names:
+        records = await db[collection_name].find().to_list(20000)
+        backup_data["collections"][collection_name] = [
+            serialize_backup_value(record) for record in records
+        ]
+
+    await log_activity(current_user["id"], "admin_backup_export", "Exported full app backup data")
+    return backup_data
+
 # ===== Dashboard Routes =====
 @api_router.get("/dashboard/stats", response_model=DashboardStats)
 async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
@@ -3396,6 +3705,113 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
         attendance_today=attendance_today,
         recent_activities=recent_activities
     )
+
+@api_router.get("/manager/dashboard")
+async def get_manager_dashboard(
+    target_date: Optional[str] = None,
+    current_user: dict = Depends(require_manager)
+):
+    manager_employee = await db.employees.find_one({"user_id": current_user["id"]})
+    if not manager_employee:
+        manager_employee = await db.employees.find_one({"email": current_user["email"]})
+    if not manager_employee:
+        raise HTTPException(status_code=404, detail="Manager employee profile not found")
+
+    date_value = target_date or datetime.utcnow().strftime("%Y-%m-%d")
+    employee_query: Dict[str, Any] = {"status": "active"}
+
+    if current_user["role"] == "manager":
+        employee_query["department_id"] = manager_employee.get("department_id")
+
+    employees = await db.employees.find(employee_query).to_list(500)
+    employee_ids = [employee["id"] for employee in employees]
+
+    shifts = await db.shifts.find({"employee_id": {"$in": employee_ids}, "date": date_value}).to_list(500)
+    attendance_records = await db.attendance.find({"employee_id": {"$in": employee_ids}, "date": date_value}).to_list(500)
+    pending_leave_requests = await db.leave_requests.find({
+        "employee_id": {"$in": employee_ids},
+        "status": "pending",
+    }).sort("created_at", -1).to_list(100)
+
+    shift_by_employee = {shift["employee_id"]: shift for shift in shifts}
+    attendance_by_employee = {record["employee_id"]: record for record in attendance_records}
+
+    employee_rows = []
+    late_count = 0
+
+    for employee in employees:
+        shift = shift_by_employee.get(employee["id"], {})
+        attendance = attendance_by_employee.get(employee["id"], {})
+        shift_status = shift.get("status")
+
+        if shift_status == "on_break":
+            workforce_status = "on_break"
+        elif shift_status in {"clocked_in", "working"} or (attendance.get("clock_in") and not attendance.get("clock_out")):
+            workforce_status = "working"
+        else:
+            workforce_status = "clocked_out"
+
+        clock_in_value = attendance.get("clock_in_local") or shift.get("clock_in", {}).get("local_time")
+        is_late_today = False
+
+        if clock_in_value:
+            try:
+                parsed_clock_in = datetime.fromisoformat(clock_in_value.replace("Z", "+00:00")) if "T" in str(clock_in_value) else datetime.strptime(clock_in_value, "%Y-%m-%d %H:%M:%S")
+                is_late_today = parsed_clock_in.hour >= 9 and (parsed_clock_in.hour > 9 or parsed_clock_in.minute > 0)
+            except Exception:
+                is_late_today = False
+
+        if is_late_today:
+            late_count += 1
+
+        employee_rows.append({
+            "id": employee["id"],
+            "employee_id": employee.get("employee_id"),
+            "name": f"{employee.get('first_name', '')} {employee.get('last_name', '')}".strip(),
+            "department_name": None,
+            "job_title": employee.get("job_title"),
+            "status": workforce_status,
+            "is_late_today": is_late_today,
+            "today_hours": float(attendance.get("total_hours", 0) or 0),
+            "clock_in_local": clock_in_value,
+            "break_started_local": shift.get("current_break", {}).get("start_local") if shift.get("current_break") else None,
+        })
+
+    departments = {department["id"]: department["name"] for department in await db.departments.find().to_list(100)}
+    for row in employee_rows:
+        employee_doc = next((employee for employee in employees if employee["id"] == row["id"]), None)
+        if employee_doc:
+            row["department_name"] = departments.get(employee_doc.get("department_id"))
+
+    leave_type_names = {leave_type["id"]: leave_type["name"] for leave_type in await ensure_core_leave_types()}
+    leave_request_rows = [
+        {
+            "id": leave_request["id"],
+            "employee_id": leave_request["employee_id"],
+            "employee_name": next((row["name"] for row in employee_rows if row["id"] == leave_request["employee_id"]), "Employee"),
+            "leave_type_name": leave_request.get("leave_type_name") or leave_type_names.get(leave_request.get("leave_type_id"), "Leave"),
+            "start_date": leave_request["start_date"],
+            "end_date": leave_request["end_date"],
+            "status": leave_request["status"],
+            "reason": leave_request.get("reason"),
+            "created_at": leave_request["created_at"].isoformat() if isinstance(leave_request["created_at"], datetime) else leave_request["created_at"],
+        }
+        for leave_request in pending_leave_requests
+    ]
+
+    return {
+        "date": date_value,
+        "summary": {
+            "total_employees": len(employee_rows),
+            "working": sum(1 for row in employee_rows if row["status"] == "working"),
+            "on_break": sum(1 for row in employee_rows if row["status"] == "on_break"),
+            "clocked_out": sum(1 for row in employee_rows if row["status"] == "clocked_out"),
+            "late": late_count,
+            "pending_leave_requests": len(leave_request_rows),
+        },
+        "employees": employee_rows,
+        "pending_leave_requests": leave_request_rows,
+    }
 
 # ===== Activity Log Routes =====
 @api_router.get("/activity-logs")

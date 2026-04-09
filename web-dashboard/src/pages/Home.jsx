@@ -92,7 +92,7 @@ export default function Home() {
     {
       icon: Smartphone,
       title: 'Mobile First',
-      description: 'Native mobile apps for iOS and Android with offline support.',
+      description: 'Native mobile apps for Android with offline support.',
       color: 'bg-teal-500'
     }
   ]
