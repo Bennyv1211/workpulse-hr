@@ -1,5 +1,5 @@
 import React from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import api from '../lib/api'
 import { format, parseISO } from 'date-fns'
 import {
@@ -12,12 +12,33 @@ import {
   Eye
 } from 'lucide-react'
 
+function downloadBlob(data, fileName) {
+  const url = window.URL.createObjectURL(data instanceof Blob ? data : new Blob([data], { type: 'text/csv;charset=utf-8;' }))
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = fileName
+  anchor.click()
+  window.URL.revokeObjectURL(url)
+}
+
 export default function Payroll() {
   const { data: payroll = [], isLoading } = useQuery({
     queryKey: ['payroll'],
     queryFn: async () => {
-      const response = await api.get('/api/payroll')
+      const response = await api.get('/payroll')
       return response.data
+    }
+  })
+
+  const exportMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.get('/export/payroll?format=csv', {
+        responseType: 'blob'
+      })
+      return response.data
+    },
+    onSuccess: (data) => {
+      downloadBlob(data, 'payroll.csv')
     }
   })
 
@@ -74,13 +95,17 @@ export default function Payroll() {
           <p className="text-gray-500">Manage employee compensation</p>
         </div>
         <div className="flex gap-3">
-          <button className="btn-secondary flex items-center gap-2">
+          <button
+            onClick={() => exportMutation.mutate()}
+            disabled={exportMutation.isPending}
+            className="btn-secondary flex items-center gap-2"
+          >
             <Download className="w-4 h-4" />
             Export
           </button>
-          <button className="btn-primary flex items-center gap-2">
+          <button type="button" className="btn-primary flex items-center gap-2 opacity-80 cursor-default">
             <DollarSign className="w-4 h-4" />
-            Run Payroll
+            Payroll Review
           </button>
         </div>
       </div>

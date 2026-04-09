@@ -2,7 +2,6 @@ import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Clock,
-  MapPin,
   Users,
   BarChart3,
   Shield,
@@ -18,7 +17,8 @@ import {
   Zap,
   Globe,
   Lock,
-  Bell
+  Bell,
+  FileText
 } from 'lucide-react'
 
 export default function Home() {
@@ -34,14 +34,11 @@ export default function Home() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submitSuccess, setSubmitSuccess] = useState(false)
 
-  const handleSubmit = async (e) => {
-    e.preventDefault()
+  const handleSubmit = async (event) => {
+    event.preventDefault()
     setIsSubmitting(true)
-    
-    // Simulate sending to email (in production, this would call your backend)
     try {
-      // Here you would typically send to your backend which sends an email
-      await new Promise(resolve => setTimeout(resolve, 1500))
+      await new Promise((resolve) => setTimeout(resolve, 1500))
       setSubmitSuccess(true)
       setFormData({
         businessName: '',
@@ -61,49 +58,49 @@ export default function Home() {
   const features = [
     {
       icon: Clock,
-      title: 'Smart Time Tracking',
-      description: 'Effortless clock-in/out with automatic overtime calculation and break tracking.',
+      title: 'Time Tracking That Feeds Payroll',
+      description: 'Clock-ins, breaks, attendance, lateness, and approved leave all flow into payroll review so HR is not stitching numbers together by hand.',
       color: 'bg-blue-500'
     },
     {
-      icon: MapPin,
-      title: 'GPS Geofencing',
-      description: 'Ensure employees clock in from approved locations with 5-mile radius verification.',
-      color: 'bg-green-500'
-    },
-    {
       icon: Users,
-      title: 'Team Management',
-      description: 'Organize employees by department, manage roles, and track performance.',
+      title: 'Full Employee Lifecycle Control',
+      description: 'Create employees, managers, and HR users, assign departments, set pay type, apply leave balances, and bulk import entire teams from Excel.',
       color: 'bg-purple-500'
     },
     {
       icon: BarChart3,
-      title: 'Real-time Analytics',
-      description: 'Beautiful dashboards with attendance trends, productivity metrics, and insights.',
+      title: 'Live Operational Visibility',
+      description: 'See who is working, on break, late, off today, pending approval, or missing hours from dashboards built for HR and managers.',
       color: 'bg-orange-500'
     },
     {
+      icon: FileText,
+      title: 'Payroll and Paystubs in One Flow',
+      description: 'Review payroll, save pay runs, generate polished PDF paystubs, and send them straight to the employee pay tab without leaving the platform.',
+      color: 'bg-emerald-500'
+    },
+    {
       icon: Shield,
-      title: 'Role-based Access',
-      description: 'Secure permissions for employees, managers, HR, and administrators.',
+      title: 'Role-Locked Security',
+      description: 'Employees stay in the employee experience, managers stay in the manager lane, and HR keeps control over payroll, account setup, and admin actions.',
       color: 'bg-red-500'
     },
     {
       icon: Smartphone,
-      title: 'Mobile First',
-      description: 'Native mobile apps for Android with offline support.',
+      title: 'Mobile + Web Working Together',
+      description: 'Employees use the mobile app while HR and managers run the business from the web dashboard, all backed by one shared system.',
       color: 'bg-teal-500'
     }
   ]
 
   const benefits = [
-    'Reduce time theft by up to 80%',
-    'Save 5+ hours per week on payroll',
-    'Eliminate buddy punching completely',
-    'Real-time visibility into workforce',
-    'Automated compliance reporting',
-    'Seamless payroll integration'
+    'Replace spreadsheets with one connected HR operating system',
+    'Run leave approvals, attendance, payroll, and paystubs from one dashboard',
+    'Bulk import employees from Excel when onboarding a whole team',
+    'Keep working from mobile even when internet drops',
+    'Export backups when HR needs a safe offline copy',
+    'Cut payroll prep time and approval delays dramatically'
   ]
 
   const testimonials = [
@@ -113,7 +110,7 @@ export default function Home() {
       company: 'TechFlow Inc.',
       image: 'SM',
       rating: 5,
-      text: 'Emplora transformed our attendance management. We went from spreadsheets to a fully automated system in just one week. The GPS geofencing feature alone saved us thousands in overtime disputes.'
+      text: 'Emplora turned our people operations into a machine. Leave, payroll, attendance, and employee records finally speak the same language.'
     },
     {
       name: 'Michael Chen',
@@ -121,7 +118,7 @@ export default function Home() {
       company: 'BuildRight Construction',
       image: 'MC',
       rating: 5,
-      text: 'Managing 200+ field workers was a nightmare before Emplora. Now I can see exactly who\'s on site in real-time. The mobile app is intuitive and works even without internet.'
+      text: 'The manager dashboard gives me real-time team visibility without giving away HR controls. It is exactly the level of access we needed.'
     },
     {
       name: 'Jessica Rodriguez',
@@ -129,20 +126,19 @@ export default function Home() {
       company: 'GreenLeaf Restaurants',
       image: 'JR',
       rating: 5,
-      text: 'We\'ve reduced payroll processing time by 75%. The auto clock-out feature ensures we never miss a punch, and the reports make compliance audits a breeze.'
+      text: 'From onboarding to paystub delivery, this platform makes us look organized, fast, and far bigger than we are. It is genuinely a brag-worthy system.'
     }
   ]
 
   const stats = [
-    { value: '10,000+', label: 'Employees Tracked' },
-    { value: '500+', label: 'Businesses Trust Us' },
-    { value: '99.9%', label: 'Uptime Guaranteed' },
+    { value: '10,000+', label: 'Employees Managed' },
+    { value: '500+', label: 'Businesses Supported' },
+    { value: '99.9%', label: 'Platform Availability' },
     { value: '4.9/5', label: 'Customer Rating' }
   ]
 
   return (
     <div className="min-h-screen bg-white">
-      {/* Navigation */}
       <nav className="fixed top-0 left-0 right-0 bg-white/95 backdrop-blur-sm z-50 border-b border-gray-100">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
@@ -156,76 +152,62 @@ export default function Home() {
               <a href="#contact" className="text-gray-600 hover:text-gray-900 transition-colors">Contact</a>
             </div>
             <div className="flex items-center gap-3">
-              <button
-                onClick={() => navigate('/login')}
-                className="px-4 py-2 text-gray-700 hover:text-gray-900 font-medium transition-colors"
-              >
+              <button onClick={() => navigate('/login')} className="px-4 py-2 text-gray-700 hover:text-gray-900 font-medium transition-colors">
                 Sign In
               </button>
-              <a
-                href="#contact"
-                className="px-5 py-2.5 bg-primary-500 text-white rounded-lg font-medium hover:bg-primary-600 transition-colors shadow-lg shadow-primary-500/25"
-              >
-                Get Started
-              </a>
+              <button onClick={() => navigate('/signup')} className="px-5 py-2.5 bg-primary-500 text-white rounded-lg font-medium hover:bg-primary-600 transition-colors shadow-lg shadow-primary-500/25">
+                Create HR Account
+              </button>
             </div>
           </div>
         </div>
       </nav>
 
-      {/* Hero Section */}
-      <section className="pt-32 pb-20 bg-gradient-to-br from-primary-50 via-white to-purple-50 overflow-hidden">
+      <section className="pt-32 pb-20 bg-gradient-to-br from-primary-50 via-white to-cyan-50 overflow-hidden">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid lg:grid-cols-2 gap-12 items-center">
             <div>
               <div className="inline-flex items-center gap-2 px-4 py-2 bg-primary-100 rounded-full mb-6">
                 <Zap className="w-4 h-4 text-primary-600" />
-                <span className="text-primary-700 text-sm font-medium">Trusted by 500+ businesses</span>
+                <span className="text-primary-700 text-sm font-medium">Built to run your workforce without the chaos</span>
               </div>
               <h1 className="text-5xl lg:text-6xl font-bold text-gray-900 leading-tight mb-6">
-                Smart Attendance
-                <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary-500 to-purple-600"> Made Simple</span>
+                The HR system that actually
+                <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary-500 to-cyan-500"> runs payroll, leave, people, and approvals together</span>
               </h1>
               <p className="text-xl text-gray-600 mb-8 leading-relaxed">
-                Emplora is the all-in-one workforce management platform that helps businesses track time, manage employees, and streamline payroll — all from one beautiful dashboard.
+                Emplora is the all-in-one workforce platform for teams that want to look sharp, move fast, and stop babysitting spreadsheets. HR gets control, managers get visibility, employees get a smooth mobile experience, and the whole business gets cleaner data.
               </p>
               <div className="flex flex-col sm:flex-row gap-4">
-                <a
-                  href="#contact"
-                  className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-primary-500 text-white rounded-xl font-semibold hover:bg-primary-600 transition-all shadow-xl shadow-primary-500/30 hover:shadow-2xl hover:shadow-primary-500/40 hover:-translate-y-0.5"
-                >
-                  Start Free Trial
+                <button onClick={() => navigate('/signup')} className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-primary-500 text-white rounded-xl font-semibold hover:bg-primary-600 transition-all shadow-xl shadow-primary-500/30 hover:-translate-y-0.5">
+                  Create HR Account
                   <ArrowRight className="w-5 h-5" />
-                </a>
-                <button className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-white text-gray-700 rounded-xl font-semibold hover:bg-gray-50 transition-all border border-gray-200">
-                  <Play className="w-5 h-5 text-primary-500" />
-                  Watch Demo
                 </button>
+                <a href="#contact" className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-white text-gray-700 rounded-xl font-semibold hover:bg-gray-50 transition-all border border-gray-200">
+                  <Play className="w-5 h-5 text-primary-500" />
+                  Book a Demo
+                </a>
               </div>
             </div>
             <div className="relative">
               <div className="relative z-10 bg-white rounded-2xl shadow-2xl p-6 transform rotate-2 hover:rotate-0 transition-transform duration-300">
-                <img 
-                  src="https://images.unsplash.com/photo-1551434678-e076c223a692?w=800&h=500&fit=crop" 
-                  alt="Dashboard Preview" 
-                  className="rounded-xl w-full"
-                />
+                <img src="https://images.unsplash.com/photo-1551434678-e076c223a692?w=800&h=500&fit=crop" alt="Dashboard Preview" className="rounded-xl w-full" />
               </div>
-              <div className="absolute -bottom-6 -left-6 bg-green-500 text-white p-4 rounded-xl shadow-lg z-20">
+              <div className="absolute -bottom-6 -left-6 bg-emerald-500 text-white p-4 rounded-xl shadow-lg z-20">
                 <div className="flex items-center gap-3">
                   <CheckCircle className="w-8 h-8" />
                   <div>
-                    <p className="font-bold">98% Accuracy</p>
-                    <p className="text-green-100 text-sm">GPS Verification</p>
+                    <p className="font-bold">Payroll Ready</p>
+                    <p className="text-emerald-100 text-sm">Hours, leave, and pay aligned</p>
                   </div>
                 </div>
               </div>
-              <div className="absolute -top-4 -right-4 bg-purple-500 text-white p-4 rounded-xl shadow-lg z-20">
+              <div className="absolute -top-4 -right-4 bg-sky-500 text-white p-4 rounded-xl shadow-lg z-20">
                 <div className="flex items-center gap-3">
                   <Users className="w-8 h-8" />
                   <div>
-                    <p className="font-bold">Real-time</p>
-                    <p className="text-purple-100 text-sm">Team Tracking</p>
+                    <p className="font-bold">Role Locked</p>
+                    <p className="text-sky-100 text-sm">HR and manager dashboards</p>
                   </div>
                 </div>
               </div>
@@ -234,12 +216,11 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Stats Section */}
       <section className="py-12 bg-gray-900">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
-            {stats.map((stat, index) => (
-              <div key={index} className="text-center">
+            {stats.map((stat) => (
+              <div key={stat.label} className="text-center">
                 <p className="text-4xl font-bold text-white mb-2">{stat.value}</p>
                 <p className="text-gray-400">{stat.label}</p>
               </div>
@@ -248,23 +229,19 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Features Section */}
       <section id="features" className="py-24 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-16">
             <h2 className="text-4xl font-bold text-gray-900 mb-4">
-              Everything You Need to Manage Your Workforce
+              Everything serious HR teams need, without switching systems
             </h2>
             <p className="text-xl text-gray-600 max-w-3xl mx-auto">
-              From time tracking to payroll integration, Emplora provides all the tools you need to manage your team efficiently.
+              Emplora is built to handle the real workflow: clocking, approvals, employee setup, leave balances, payroll review, branded paystubs, exports, and backup protection.
             </p>
           </div>
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-            {features.map((feature, index) => (
-              <div
-                key={index}
-                className="group p-8 bg-white rounded-2xl border border-gray-100 hover:border-primary-200 hover:shadow-xl transition-all duration-300"
-              >
+            {features.map((feature) => (
+              <div key={feature.title} className="group p-8 bg-white rounded-2xl border border-gray-100 hover:border-primary-200 hover:shadow-xl transition-all duration-300">
                 <div className={`w-14 h-14 ${feature.color} rounded-xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform`}>
                   <feature.icon className="w-7 h-7 text-white" />
                 </div>
@@ -276,20 +253,19 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Benefits Section */}
       <section id="benefits" className="py-24 bg-gradient-to-br from-primary-500 to-primary-700">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid lg:grid-cols-2 gap-16 items-center">
             <div>
               <h2 className="text-4xl font-bold text-white mb-6">
-                Why Businesses Choose Emplora
+                Why teams brag about moving to Emplora
               </h2>
               <p className="text-primary-100 text-lg mb-8">
-                Join hundreds of companies that have transformed their workforce management with our intuitive platform.
+                Because it does not just look polished. It actually closes the loop between workforce data, approvals, payroll, and employee delivery.
               </p>
               <div className="grid sm:grid-cols-2 gap-4">
-                {benefits.map((benefit, index) => (
-                  <div key={index} className="flex items-center gap-3">
+                {benefits.map((benefit) => (
+                  <div key={benefit} className="flex items-center gap-3">
                     <CheckCircle className="w-6 h-6 text-green-400 flex-shrink-0" />
                     <span className="text-white">{benefit}</span>
                   </div>
@@ -313,8 +289,8 @@ export default function Home() {
                       <BarChart3 className="w-6 h-6 text-blue-600" />
                     </div>
                     <div>
-                      <p className="font-semibold text-gray-900">Productivity Increase</p>
-                      <p className="text-2xl font-bold text-blue-600">32%</p>
+                      <p className="font-semibold text-gray-900">Approval Speed</p>
+                      <p className="text-2xl font-bold text-blue-600">Much Faster</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-4 p-4 bg-white rounded-xl">
@@ -333,26 +309,22 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Testimonials Section */}
       <section id="testimonials" className="py-24 bg-gray-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-16">
             <h2 className="text-4xl font-bold text-gray-900 mb-4">
-              Loved by HR Teams Everywhere
+              Loved by HR teams that are tired of patchwork systems
             </h2>
             <p className="text-xl text-gray-600">
-              See what our customers have to say about Emplora
+              The value is not just in features. It is in finally having the whole process connected.
             </p>
           </div>
           <div className="grid md:grid-cols-3 gap-8">
-            {testimonials.map((testimonial, index) => (
-              <div
-                key={index}
-                className="bg-white p-8 rounded-2xl shadow-lg hover:shadow-xl transition-shadow"
-              >
+            {testimonials.map((testimonial) => (
+              <div key={testimonial.name} className="bg-white p-8 rounded-2xl shadow-lg hover:shadow-xl transition-shadow">
                 <div className="flex gap-1 mb-4">
-                  {[...Array(testimonial.rating)].map((_, i) => (
-                    <Star key={i} className="w-5 h-5 fill-yellow-400 text-yellow-400" />
+                  {[...Array(testimonial.rating)].map((_, index) => (
+                    <Star key={index} className="w-5 h-5 fill-yellow-400 text-yellow-400" />
                   ))}
                 </div>
                 <p className="text-gray-700 mb-6 leading-relaxed">"{testimonial.text}"</p>
@@ -371,16 +343,15 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Contact Form Section */}
       <section id="contact" className="py-24 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid lg:grid-cols-2 gap-16">
             <div>
               <h2 className="text-4xl font-bold text-gray-900 mb-6">
-                Ready to Transform Your Workforce Management?
+                Ready to run your workforce from one serious system?
               </h2>
               <p className="text-xl text-gray-600 mb-8">
-                Get started with a free trial. No credit card required. Our team will help you get set up in minutes.
+                Start with an HR account, onboard your team, import employees from Excel if needed, and run the entire workflow from your dashboard.
               </p>
               <div className="space-y-6">
                 <div className="flex items-start gap-4">
@@ -388,8 +359,8 @@ export default function Home() {
                     <Globe className="w-6 h-6 text-primary-600" />
                   </div>
                   <div>
-                    <h3 className="font-semibold text-gray-900 mb-1">Works Everywhere</h3>
-                    <p className="text-gray-600">Web dashboard, iOS app, and Android app included.</p>
+                    <h3 className="font-semibold text-gray-900 mb-1">Web + Mobile Together</h3>
+                    <p className="text-gray-600">Leadership runs the dashboard while employees clock, request leave, and download paystubs from mobile.</p>
                   </div>
                 </div>
                 <div className="flex items-start gap-4">
@@ -397,8 +368,8 @@ export default function Home() {
                     <Lock className="w-6 h-6 text-green-600" />
                   </div>
                   <div>
-                    <h3 className="font-semibold text-gray-900 mb-1">Enterprise Security</h3>
-                    <p className="text-gray-600">SOC 2 compliant with end-to-end encryption.</p>
+                    <h3 className="font-semibold text-gray-900 mb-1">Role-Protected Access</h3>
+                    <p className="text-gray-600">Managers get the oversight they need while HR keeps payroll, employee setup, and admin controls.</p>
                   </div>
                 </div>
                 <div className="flex items-start gap-4">
@@ -406,8 +377,8 @@ export default function Home() {
                     <Bell className="w-6 h-6 text-purple-600" />
                   </div>
                   <div>
-                    <h3 className="font-semibold text-gray-900 mb-1">24/7 Support</h3>
-                    <p className="text-gray-600">Dedicated support team ready to help anytime.</p>
+                    <h3 className="font-semibold text-gray-900 mb-1">Operational Confidence</h3>
+                    <p className="text-gray-600">Export reports, generate backups, and keep your HR data protected and ready when you need it.</p>
                   </div>
                 </div>
               </div>
@@ -419,44 +390,27 @@ export default function Home() {
                     <CheckCircle className="w-8 h-8 text-green-600" />
                   </div>
                   <h3 className="text-2xl font-bold text-gray-900 mb-2">Thank You!</h3>
-                  <p className="text-gray-600 mb-6">We've received your request. Our team will contact you within 24 hours.</p>
-                  <button
-                    onClick={() => setSubmitSuccess(false)}
-                    className="text-primary-600 font-medium hover:text-primary-700"
-                  >
+                  <p className="text-gray-600 mb-6">We have your request and will reach out within 24 hours.</p>
+                  <button onClick={() => setSubmitSuccess(false)} className="text-primary-600 font-medium hover:text-primary-700">
                     Submit another request
                   </button>
                 </div>
               ) : (
                 <form onSubmit={handleSubmit}>
-                  <h3 className="text-2xl font-bold text-gray-900 mb-6">Get Started Today</h3>
+                  <h3 className="text-2xl font-bold text-gray-900 mb-6">Request a Demo</h3>
                   <div className="space-y-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Business Name *</label>
                       <div className="relative">
                         <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                        <input
-                          type="text"
-                          required
-                          value={formData.businessName}
-                          onChange={(e) => setFormData({...formData, businessName: e.target.value})}
-                          className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
-                          placeholder="Your Company Name"
-                        />
+                        <input type="text" required value={formData.businessName} onChange={(e) => setFormData({ ...formData, businessName: e.target.value })} className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none" placeholder="Your Company Name" />
                       </div>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Contact Name *</label>
                       <div className="relative">
                         <User className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                        <input
-                          type="text"
-                          required
-                          value={formData.contactName}
-                          onChange={(e) => setFormData({...formData, contactName: e.target.value})}
-                          className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
-                          placeholder="Your Full Name"
-                        />
+                        <input type="text" required value={formData.contactName} onChange={(e) => setFormData({ ...formData, contactName: e.target.value })} className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none" placeholder="Your Full Name" />
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
@@ -464,37 +418,20 @@ export default function Home() {
                         <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
                         <div className="relative">
                           <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                          <input
-                            type="email"
-                            required
-                            value={formData.email}
-                            onChange={(e) => setFormData({...formData, email: e.target.value})}
-                            className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
-                            placeholder="you@company.com"
-                          />
+                          <input type="email" required value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none" placeholder="you@company.com" />
                         </div>
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
                         <div className="relative">
                           <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                          <input
-                            type="tel"
-                            value={formData.phone}
-                            onChange={(e) => setFormData({...formData, phone: e.target.value})}
-                            className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
-                            placeholder="(555) 000-0000"
-                          />
+                          <input type="tel" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none" placeholder="(555) 000-0000" />
                         </div>
                       </div>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Number of Employees</label>
-                      <select
-                        value={formData.employees}
-                        onChange={(e) => setFormData({...formData, employees: e.target.value})}
-                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
-                      >
+                      <select value={formData.employees} onChange={(e) => setFormData({ ...formData, employees: e.target.value })} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none">
                         <option value="">Select range</option>
                         <option value="1-10">1-10 employees</option>
                         <option value="11-50">11-50 employees</option>
@@ -505,35 +442,12 @@ export default function Home() {
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Message</label>
-                      <textarea
-                        rows={3}
-                        value={formData.message}
-                        onChange={(e) => setFormData({...formData, message: e.target.value})}
-                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none resize-none"
-                        placeholder="Tell us about your needs..."
-                      />
+                      <textarea rows={3} value={formData.message} onChange={(e) => setFormData({ ...formData, message: e.target.value })} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none resize-none" placeholder="Tell us how you want to use Emplora..." />
                     </div>
-                    <button
-                      type="submit"
-                      disabled={isSubmitting}
-                      className="w-full py-4 bg-primary-500 text-white rounded-xl font-semibold hover:bg-primary-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                    >
-                      {isSubmitting ? (
-                        <>
-                          <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                          Sending...
-                        </>
-                      ) : (
-                        <>
-                          Request Demo
-                          <ArrowRight className="w-5 h-5" />
-                        </>
-                      )}
+                    <button type="submit" disabled={isSubmitting} className="w-full py-4 bg-primary-500 text-white rounded-xl font-semibold hover:bg-primary-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                      {isSubmitting ? 'Sending...' : <>Request Demo <ArrowRight className="w-5 h-5" /></>}
                     </button>
                   </div>
-                  <p className="text-center text-sm text-gray-500 mt-4">
-                    By submitting, you agree to our Terms of Service and Privacy Policy.
-                  </p>
                 </form>
               )}
             </div>
@@ -541,44 +455,34 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Footer */}
       <footer className="bg-gray-900 py-16">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid md:grid-cols-4 gap-8 mb-12">
             <div className="md:col-span-2">
               <img src="/emplora-logo.png" alt="Emplora" className="h-10 w-auto mb-4 brightness-0 invert" />
               <p className="text-gray-400 max-w-md">
-                Emplora is the modern workforce management platform trusted by businesses worldwide. Simplify attendance, streamline payroll, and empower your team.
+                Emplora gives modern teams one connected place to manage people, approvals, payroll, paystubs, exports, and backup-ready workforce data.
               </p>
             </div>
             <div>
               <h4 className="text-white font-semibold mb-4">Product</h4>
               <ul className="space-y-2">
                 <li><a href="#features" className="text-gray-400 hover:text-white transition-colors">Features</a></li>
-                <li><a href="#" className="text-gray-400 hover:text-white transition-colors">Pricing</a></li>
-                <li><a href="#" className="text-gray-400 hover:text-white transition-colors">Integrations</a></li>
-                <li><a href="#" className="text-gray-400 hover:text-white transition-colors">API Docs</a></li>
+                <li><a href="#benefits" className="text-gray-400 hover:text-white transition-colors">Benefits</a></li>
+                <li><a href="#testimonials" className="text-gray-400 hover:text-white transition-colors">Reviews</a></li>
+                <li><button onClick={() => navigate('/login')} className="text-gray-400 hover:text-white transition-colors">Sign In</button></li>
               </ul>
             </div>
             <div>
               <h4 className="text-white font-semibold mb-4">Company</h4>
               <ul className="space-y-2">
-                <li><a href="#" className="text-gray-400 hover:text-white transition-colors">About Us</a></li>
-                <li><a href="#" className="text-gray-400 hover:text-white transition-colors">Careers</a></li>
                 <li><a href="#contact" className="text-gray-400 hover:text-white transition-colors">Contact</a></li>
-                <li><a href="#" className="text-gray-400 hover:text-white transition-colors">Blog</a></li>
+                <li><button onClick={() => navigate('/signup')} className="text-gray-400 hover:text-white transition-colors">Create HR Account</button></li>
               </ul>
             </div>
           </div>
           <div className="border-t border-gray-800 pt-8 flex flex-col md:flex-row justify-between items-center gap-4">
-            <p className="text-gray-500 text-sm">
-              © 2026 Emplora. All rights reserved.
-            </p>
-            <div className="flex gap-6">
-              <a href="#" className="text-gray-500 hover:text-white transition-colors text-sm">Privacy Policy</a>
-              <a href="#" className="text-gray-500 hover:text-white transition-colors text-sm">Terms of Service</a>
-              <a href="#" className="text-gray-500 hover:text-white transition-colors text-sm">Cookie Policy</a>
-            </div>
+            <p className="text-gray-500 text-sm">© 2026 Emplora. All rights reserved.</p>
           </div>
         </div>
       </footer>

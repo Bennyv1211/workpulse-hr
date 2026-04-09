@@ -1,6 +1,7 @@
 import React from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import api from '../lib/api'
+import * as XLSX from 'xlsx'
 import {
   BarChart3,
   Download,
@@ -16,13 +17,27 @@ import {
 export default function Reports() {
   const exportMutation = useMutation({
     mutationFn: async ({ entity, format }) => {
-      const response = await api.get(`/api/export/${entity}?format=${format}`, {
+      if (format === 'xlsx') {
+        const response = await api.get(`/export/${entity}?format=json`)
+        return { data: response.data, entity, format }
+      }
+
+      const response = await api.get(`/export/${entity}?format=${format}`, {
         responseType: 'blob'
       })
       return { data: response.data, entity, format }
     },
     onSuccess: ({ data, entity, format }) => {
-      const url = window.URL.createObjectURL(data)
+      if (format === 'xlsx') {
+        const workbook = XLSX.utils.book_new()
+        const rows = Array.isArray(data) ? data : []
+        const worksheet = XLSX.utils.json_to_sheet(rows)
+        XLSX.utils.book_append_sheet(workbook, worksheet, entity)
+        XLSX.writeFile(workbook, `${entity}-report.xlsx`)
+        return
+      }
+
+      const url = window.URL.createObjectURL(data instanceof Blob ? data : new Blob([data], { type: 'text/csv;charset=utf-8;' }))
       const a = document.createElement('a')
       a.href = url
       a.download = `${entity}-report.${format}`

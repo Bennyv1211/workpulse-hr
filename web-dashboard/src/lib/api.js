@@ -1,7 +1,13 @@
 import axios from 'axios'
 
+const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL
+const fallbackApiBaseUrl =
+  typeof window !== 'undefined' && window.location.hostname === 'localhost'
+    ? '/api'
+    : 'https://workpulse-hr.onrender.com/api'
+
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: configuredApiBaseUrl || fallbackApiBaseUrl,
   headers: {
     'Content-Type': 'application/json',
   },

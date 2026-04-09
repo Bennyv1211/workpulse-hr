@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Eye, EyeOff, Lock, Mail, User } from 'lucide-react'
+import { Eye, EyeOff, Lock, Mail, User, ShieldCheck, Building2 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 
 export default function Signup() {
@@ -48,11 +48,40 @@ export default function Signup() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-primary-700 to-cyan-600 flex items-center justify-center p-4">
-      <div className="w-full max-w-lg">
-        <div className="bg-white rounded-3xl shadow-2xl p-8 border border-white/40">
-          <div className="text-center mb-8">
-            <img src="/emplora-wordmark.svg" alt="WorkPulse HR" className="h-14 mx-auto mb-4" />
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_#0f172a,_#1d4ed8_45%,_#38bdf8)] flex items-center justify-center p-4">
+      <div className="w-full max-w-5xl grid lg:grid-cols-[1.1fr_0.9fr] rounded-[2rem] overflow-hidden shadow-2xl border border-white/15 bg-white">
+        <div className="hidden lg:flex flex-col justify-between p-10 bg-slate-950 text-white">
+          <div>
+            <img src="/emplora-wordmark.svg" alt="Emplora" className="h-14 w-auto brightness-0 invert" />
+            <p className="mt-8 text-4xl font-bold leading-tight">
+              Create the HR workspace that will manage employees, managers, payroll, leave approvals, paystubs, and reporting.
+            </p>
+            <p className="mt-5 text-slate-300 text-lg leading-8">
+              This web signup is intentionally reserved for HR account creation. Employees do not register here, and manager access is added from inside the system.
+            </p>
+          </div>
+
+          <div className="grid gap-4">
+            <div className="rounded-2xl bg-white/5 border border-white/10 p-5">
+              <div className="flex items-center gap-3 mb-2">
+                <ShieldCheck className="w-5 h-5 text-cyan-300" />
+                <p className="font-semibold">HR-only onboarding</p>
+              </div>
+              <p className="text-sm text-slate-300">The account created here becomes the HR control center for your company setup.</p>
+            </div>
+            <div className="rounded-2xl bg-white/5 border border-white/10 p-5">
+              <div className="flex items-center gap-3 mb-2">
+                <Building2 className="w-5 h-5 text-cyan-300" />
+                <p className="font-semibold">Built for company rollout</p>
+              </div>
+              <p className="text-sm text-slate-300">Once inside, HR can create employees and managers, assign pay details, and manage leave balances and payroll.</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-8 sm:p-10">
+          <div className="text-center lg:text-left mb-8">
+            <img src="/emplora-wordmark.svg" alt="Emplora" className="h-12 mx-auto lg:mx-0 mb-4" />
             <p className="text-gray-500 mt-1">Create an HR admin account for your company workspace.</p>
           </div>
 
@@ -84,7 +113,7 @@ export default function Signup() {
               <span className="block text-sm font-medium text-gray-700 mb-2">Work Email</span>
               <div className="relative">
                 <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                <input type="email" className="input pl-10" value={form.email} onChange={handleChange('email')} required />
+                <input type="email" className="input pl-10" value={form.email} onChange={handleChange('email')} placeholder="hr@company.com" required />
               </div>
             </label>
 
@@ -92,13 +121,7 @@ export default function Signup() {
               <span className="block text-sm font-medium text-gray-700 mb-2">Password</span>
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  className="input pl-10 pr-10"
-                  value={form.password}
-                  onChange={handleChange('password')}
-                  required
-                />
+                <input type={showPassword ? 'text' : 'password'} className="input pl-10 pr-10" value={form.password} onChange={handleChange('password')} required />
                 <button type="button" className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" onClick={() => setShowPassword((current) => !current)}>
                   {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                 </button>
@@ -109,24 +132,14 @@ export default function Signup() {
               <span className="block text-sm font-medium text-gray-700 mb-2">Confirm Password</span>
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                <input
-                  type={showConfirmPassword ? 'text' : 'password'}
-                  className="input pl-10 pr-10"
-                  value={form.confirmPassword}
-                  onChange={handleChange('confirmPassword')}
-                  required
-                />
+                <input type={showConfirmPassword ? 'text' : 'password'} className="input pl-10 pr-10" value={form.confirmPassword} onChange={handleChange('confirmPassword')} required />
                 <button type="button" className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" onClick={() => setShowConfirmPassword((current) => !current)}>
                   {showConfirmPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                 </button>
               </div>
             </label>
 
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full btn-primary py-3 text-base disabled:opacity-50 disabled:cursor-not-allowed"
-            >
+            <button type="submit" disabled={loading} className="w-full btn-primary py-3 text-base disabled:opacity-50 disabled:cursor-not-allowed">
               {loading ? 'Creating HR Account...' : 'Create HR Account'}
             </button>
           </form>

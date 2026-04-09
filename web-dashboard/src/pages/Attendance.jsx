@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import api from '../lib/api'
 import { format, parseISO, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, isToday } from 'date-fns'
 import {
@@ -13,6 +13,15 @@ import {
   UserX,
   Plane
 } from 'lucide-react'
+
+function downloadBlob(data, fileName) {
+  const url = window.URL.createObjectURL(data instanceof Blob ? data : new Blob([data], { type: 'text/csv;charset=utf-8;' }))
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = fileName
+  anchor.click()
+  window.URL.revokeObjectURL(url)
+}
 
 export default function Attendance() {
   const [currentDate, setCurrentDate] = useState(new Date())
@@ -30,6 +39,18 @@ export default function Attendance() {
     queryFn: async () => {
       const response = await api.get('/dashboard/stats')
       return response.data
+    }
+  })
+
+  const exportMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.get('/export/attendance?format=csv', {
+        responseType: 'blob'
+      })
+      return response.data
+    },
+    onSuccess: (data) => {
+      downloadBlob(data, 'attendance.csv')
     }
   })
 
@@ -59,7 +80,11 @@ export default function Attendance() {
           <h1 className="text-2xl font-bold text-gray-900">Attendance</h1>
           <p className="text-gray-500">{format(new Date(), 'EEEE, MMMM d, yyyy')}</p>
         </div>
-        <button className="btn-secondary flex items-center gap-2">
+        <button
+          onClick={() => exportMutation.mutate()}
+          disabled={exportMutation.isPending}
+          className="btn-secondary flex items-center gap-2"
+        >
           <Download className="w-4 h-4" />
           Export Report
         </button>

@@ -13,6 +13,16 @@ import {
   AlertCircle
 } from 'lucide-react'
 
+function downloadBlob(data, fileName, mimeType = 'text/csv;charset=utf-8;') {
+  const blob = data instanceof Blob ? data : new Blob([data], { type: mimeType })
+  const url = window.URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = fileName
+  anchor.click()
+  window.URL.revokeObjectURL(url)
+}
+
 export default function Leave() {
   const [filter, setFilter] = useState('all')
   const queryClient = useQueryClient()
@@ -20,20 +30,32 @@ export default function Leave() {
   const { data: leaveRequests = [], isLoading } = useQuery({
     queryKey: ['leave-requests'],
     queryFn: async () => {
-      const response = await api.get('/api/leave-requests')
+      const response = await api.get('/leave-requests')
       return response.data
     }
   })
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, status }) => {
-      const response = await api.put(`/api/leave-requests/${id}`, { status })
+      const response = await api.put(`/leave-requests/${id}`, { status })
       return response.data
     },
     onSuccess: () => {
       queryClient.invalidateQueries(['leave-requests'])
       queryClient.invalidateQueries(['dashboard-stats'])
     }
+  })
+
+  const exportMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.get('/export/leave?format=csv', {
+        responseType: 'blob',
+      })
+      return response.data
+    },
+    onSuccess: (data) => {
+      downloadBlob(data, 'leave-requests.csv')
+    },
   })
 
   const filteredRequests = filter === 'all' 
@@ -66,7 +88,11 @@ export default function Leave() {
             {leaveRequests.filter(r => r.status === 'pending').length} pending approvals
           </p>
         </div>
-        <button className="btn-secondary flex items-center gap-2">
+        <button
+          onClick={() => exportMutation.mutate()}
+          disabled={exportMutation.isPending}
+          className="btn-secondary flex items-center gap-2"
+        >
           <Download className="w-4 h-4" />
           Export
         </button>

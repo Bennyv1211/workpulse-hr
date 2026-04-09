@@ -14,7 +14,7 @@ import {
   Menu,
   X,
   Bell,
-  ReceiptText
+  FileText
 } from 'lucide-react'
 
 export default function Layout() {
@@ -31,7 +31,7 @@ export default function Layout() {
         { name: 'Leave Requests', href: '/dashboard/leave', icon: Calendar },
         { name: 'Attendance', href: '/dashboard/attendance', icon: Clock },
         { name: 'Payroll', href: '/dashboard/payroll', icon: DollarSign },
-        { name: 'Paystubs', href: '/dashboard/paystubs', icon: ReceiptText },
+        { name: 'Paystubs', href: '/dashboard/paystubs', icon: FileText },
         { name: 'Reports', href: '/dashboard/reports', icon: BarChart3 },
         { name: 'Settings', href: '/dashboard/settings', icon: Settings },
       ]
@@ -59,7 +59,7 @@ export default function Layout() {
       <aside className={`fixed top-0 left-0 z-50 h-screen w-64 bg-white border-r border-gray-200 transform transition-transform duration-200 lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="flex flex-col h-full">
           <div className="flex items-center gap-3 px-6 py-5 border-b border-gray-100">
-            <img src="/emplora-wordmark.svg" alt="WorkPulse HR" className="h-10 w-auto" />
+            <img src="/emplora-wordmark.svg" alt="Emplora" className="h-10 w-auto" />
             <button
               className="ml-auto lg:hidden"
               onClick={() => setSidebarOpen(false)}
