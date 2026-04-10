@@ -128,38 +128,42 @@ def make_pdf_bytes(
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=letter)
     width, height = letter
-    logo_path = ROOT_DIR.parent / "frontend" / "assets" / "images" / "icon.png"
+    logo_candidates = [
+        ROOT_DIR.parent / "frontend" / "assets" / "images" / "icon.png",
+        ROOT_DIR / "icon.png",
+    ]
+    logo_path = next((path for path in logo_candidates if path.exists()), None)
 
     def draw_money(value: float) -> str:
         return f"${float(value or 0):,.2f}"
 
-    def draw_row(y_pos: float, label: str, value: str, bold: bool = False):
+    def draw_column_row(left_x: float, right_x: float, y_pos: float, label: str, value: str, bold: bool = False):
         c.setFont("Helvetica-Bold" if bold else "Helvetica", 10.5)
         c.setFillColor(colors.HexColor("#334155"))
-        c.drawString(55, y_pos, label)
-        c.drawRightString(width - 55, y_pos, value)
+        c.drawString(left_x, y_pos, label)
+        c.drawRightString(right_x, y_pos, value)
 
     c.setFillColor(colors.HexColor("#0F172A"))
     c.setStrokeColor(colors.HexColor("#D9E2F0"))
     c.setLineWidth(1)
 
-    if logo_path.exists():
+    if logo_path:
         try:
-            c.drawImage(ImageReader(str(logo_path)), 50, height - 98, width=52, height=52, mask="auto")
+            c.drawImage(ImageReader(str(logo_path)), 50, height - 84, width=40, height=40, mask="auto")
         except Exception:
             pass
 
     c.setFont("Helvetica-Bold", 19)
-    c.drawString(108, height - 58, "Emplora Paystub")
+    c.drawString(98, height - 56, "Emplora Paystub")
     c.setFont("Helvetica", 10)
     c.setFillColor(colors.HexColor("#64748B"))
-    c.drawString(108, height - 74, "Official earnings statement")
+    c.drawString(98, height - 72, "Official earnings statement")
 
     c.setFillColor(colors.HexColor("#2563EB"))
     c.roundRect(width - 200, height - 92, 145, 40, 14, stroke=0, fill=1)
     c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 11)
-    c.drawCentredString(width - 127, height - 67, f"Pay Date {pay_date}")
+    c.drawCentredString(width - 127.5, height - 68.5, f"Pay Date {pay_date}")
 
     c.setFillColor(colors.white)
     c.setFillColor(colors.HexColor("#FFFFFF"))
@@ -194,27 +198,35 @@ def make_pdf_bytes(
     c.drawString(60, height - 265, "Earnings")
     c.drawString(60 + (width - 105) / 2 + 15, height - 265, "Deductions")
 
-    earnings_x_right = 45 + (width - 105) / 2 - 15
+    earnings_left = 60
+    earnings_right = 45 + (width - 105) / 2 - 18
     deductions_left = 60 + (width - 105) / 2 + 15
     deductions_right = width - 60
 
-    def draw_right_row(y_pos: float, label: str, value: str, bold: bool = False):
-        c.setFont("Helvetica-Bold" if bold else "Helvetica", 10.5)
-        c.setFillColor(colors.HexColor("#334155"))
-        c.drawString(deductions_left, y_pos, label)
-        c.drawRightString(deductions_right, y_pos, value)
+    draw_column_row(earnings_left, earnings_right, height - 290, "Basic Pay", draw_money(basic_pay))
+    draw_column_row(earnings_left, earnings_right, height - 314, "Overtime Pay", draw_money(overtime_pay))
+    draw_column_row(earnings_left, earnings_right, height - 338, "Bonus", draw_money(bonus))
+    draw_column_row(
+        earnings_left,
+        earnings_right,
+        height - 362,
+        "Pay Before Deductions",
+        draw_money(basic_pay + overtime_pay + bonus),
+    )
+    draw_column_row(earnings_left, earnings_right, height - 386, "Gross Pay", draw_money(gross_pay), bold=True)
 
-    draw_row(height - 290, "Basic Pay", draw_money(basic_pay))
-    draw_row(height - 312, "Overtime Pay", draw_money(overtime_pay))
-    draw_row(height - 334, "Bonus", draw_money(bonus))
-    draw_row(height - 356, "Pay Before Deductions", draw_money(basic_pay + overtime_pay + bonus))
-    draw_row(height - 366, "Gross Pay", draw_money(gross_pay), bold=True)
-
-    draw_right_row(height - 290, "Tax", draw_money(tax))
-    draw_right_row(height - 312, "Deductions", draw_money(deductions))
-    draw_right_row(height - 334, "Benefits", draw_money(benefits_deduction))
-    draw_right_row(height - 356, "Total Deductions", draw_money(tax + deductions + benefits_deduction), bold=True)
-    draw_right_row(height - 378, "Take Home Pay", draw_money(net_pay), bold=True)
+    draw_column_row(deductions_left, deductions_right, height - 290, "Tax", draw_money(tax))
+    draw_column_row(deductions_left, deductions_right, height - 314, "Deductions", draw_money(deductions))
+    draw_column_row(deductions_left, deductions_right, height - 338, "Benefits", draw_money(benefits_deduction))
+    draw_column_row(
+        deductions_left,
+        deductions_right,
+        height - 362,
+        "Total Deductions",
+        draw_money(tax + deductions + benefits_deduction),
+        bold=True,
+    )
+    draw_column_row(deductions_left, deductions_right, height - 386, "Take Home Pay", draw_money(net_pay), bold=True)
 
     c.setFillColor(colors.HexColor("#DBEAFE"))
     c.roundRect(45, height - 530, width - 90, 54, 18, stroke=0, fill=1)
@@ -2602,6 +2614,28 @@ async def get_leave_requests(
             query["employee_id"] = employee["id"]
         else:
             return []
+    elif current_user["role"] == "manager":
+        manager_employee = await db.employees.find_one({"user_id": current_user["id"]})
+        if not manager_employee:
+            manager_employee = await db.employees.find_one({"email": current_user["email"]})
+        if not manager_employee:
+            return []
+
+        team_query: Dict[str, Any] = {"status": "active"}
+        if manager_employee.get("department_id"):
+            team_query["department_id"] = manager_employee["department_id"]
+
+        team_employees = await db.employees.find(team_query).to_list(500)
+        team_employee_ids = {employee["id"] for employee in team_employees}
+        if not team_employee_ids:
+            return []
+
+        if employee_id:
+            if employee_id not in team_employee_ids:
+                return []
+            query["employee_id"] = employee_id
+        else:
+            query["employee_id"] = {"$in": list(team_employee_ids)}
     elif employee_id:
         query["employee_id"] = employee_id
     
@@ -2966,6 +3000,28 @@ async def get_attendance(
         employee = await db.employees.find_one({"user_id": current_user["id"]})
         if employee:
             query["employee_id"] = employee["id"]
+    elif current_user["role"] == "manager":
+        manager_employee = await db.employees.find_one({"user_id": current_user["id"]})
+        if not manager_employee:
+            manager_employee = await db.employees.find_one({"email": current_user["email"]})
+        if not manager_employee:
+            return []
+
+        team_query: Dict[str, Any] = {"status": "active"}
+        if manager_employee.get("department_id"):
+            team_query["department_id"] = manager_employee["department_id"]
+
+        team_employees = await db.employees.find(team_query).to_list(500)
+        team_employee_ids = {employee["id"] for employee in team_employees}
+        if not team_employee_ids:
+            return []
+
+        if employee_id:
+            if employee_id not in team_employee_ids:
+                return []
+            query["employee_id"] = employee_id
+        else:
+            query["employee_id"] = {"$in": list(team_employee_ids)}
     elif employee_id:
         query["employee_id"] = employee_id
     
@@ -3784,7 +3840,10 @@ async def get_manager_dashboard(
             "is_late_today": is_late_today,
             "today_hours": float(attendance.get("total_hours", 0) or 0),
             "clock_in_local": clock_in_value,
+            "clock_in_location": attendance.get("clock_in_location") or shift.get("clock_in", {}).get("location"),
+            "clock_out_location": attendance.get("clock_out_location"),
             "break_started_local": shift.get("current_break", {}).get("start_local") if shift.get("current_break") else None,
+            "assigned_work_location": employee.get("work_location"),
         })
 
     departments = {department["id"]: department["name"] for department in await db.departments.find().to_list(100)}

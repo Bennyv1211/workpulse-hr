@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { Eye, EyeOff, Mail, Lock, Check, ShieldCheck, Briefcase } from 'lucide-react'
+import { Eye, EyeOff, Mail, Lock, Check, ShieldCheck, Briefcase, ChevronDown } from 'lucide-react'
 
 export default function Login() {
   const [email, setEmail] = useState('')
@@ -10,6 +10,7 @@ export default function Login() {
   const [rememberMe, setRememberMe] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [showTerms, setShowTerms] = useState(false)
   const { login } = useAuth()
   const navigate = useNavigate()
 
@@ -31,9 +32,9 @@ export default function Login() {
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_#0f172a,_#1d4ed8_45%,_#38bdf8)] flex items-center justify-center p-4">
       <div className="w-full max-w-5xl grid lg:grid-cols-[1.1fr_0.9fr] rounded-[2rem] overflow-hidden shadow-2xl border border-white/15 bg-white">
-        <div className="hidden lg:flex flex-col justify-between p-10 bg-slate-950 text-white">
+        <div className="hidden lg:flex flex-col p-10 bg-slate-950 text-white">
           <div>
-            <img src="/emplora-wordmark.svg" alt="Emplora" className="h-14 w-auto brightness-0 invert" />
+            <img src="/emplora-wordmark.svg" alt="Emplora" className="h-14 w-auto" />
             <p className="mt-8 text-4xl font-bold leading-tight">
               The control center for HR and managers who need payroll, leave, people data, and live team visibility in one place.
             </p>
@@ -42,7 +43,7 @@ export default function Login() {
             </p>
           </div>
 
-          <div className="grid gap-4">
+          <div className="grid gap-4 mt-8">
             <div className="rounded-2xl bg-white/5 border border-white/10 p-5">
               <div className="flex items-center gap-3 mb-2">
                 <ShieldCheck className="w-5 h-5 text-cyan-300" />
@@ -121,6 +122,34 @@ export default function Login() {
             <Link to="/signup" className="text-primary-600 font-semibold hover:text-primary-700">
               Create an HR account
             </Link>
+          </div>
+
+          <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setShowTerms((current) => !current)}
+              className="w-full flex items-center justify-between px-5 py-4 text-left"
+            >
+              <span className="text-base font-semibold text-slate-900">Terms & Privacy</span>
+              <ChevronDown className={`w-5 h-5 text-slate-500 transition-transform ${showTerms ? 'rotate-180' : ''}`} />
+            </button>
+            {showTerms && (
+              <div className="px-5 pb-5 text-sm text-slate-600">
+                <p className="leading-6">
+                  Emplora collects the data needed to run the platform, including account details, employee
+                  records, attendance activity, leave requests, payroll and paystub information, session details,
+                  and location data when GPS attendance features are used.
+                </p>
+                <p className="leading-6 mt-3">
+                  We use this information solely for app functionality: secure sign-in, workforce management,
+                  approvals, payroll processing, paystub delivery, reporting, backups, and system reliability.
+                </p>
+                <p className="leading-6 mt-3">
+                  We do not sell your data, and we do not send it to third-party apps for advertising or resale.
+                  Data is only handled as needed to operate and support the service.
+                </p>
+              </div>
+            )}
           </div>
         </div>
       </div>

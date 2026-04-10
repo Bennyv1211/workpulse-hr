@@ -143,7 +143,7 @@ export default function Home() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center gap-2">
-              <img src="/emplora-logo.png" alt="Emplora" className="h-8 w-auto" />
+              <img src="/emplora-wordmark.svg" alt="Emplora" className="h-8 w-auto" />
             </div>
             <div className="hidden md:flex items-center gap-8">
               <a href="#features" className="text-gray-600 hover:text-gray-900 transition-colors">Features</a>
@@ -185,7 +185,7 @@ export default function Home() {
                 </button>
                 <a href="#contact" className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-white text-gray-700 rounded-xl font-semibold hover:bg-gray-50 transition-all border border-gray-200">
                   <Play className="w-5 h-5 text-primary-500" />
-                  Book a Demo
+                  Contact Us
                 </a>
               </div>
             </div>
@@ -390,14 +390,14 @@ export default function Home() {
                     <CheckCircle className="w-8 h-8 text-green-600" />
                   </div>
                   <h3 className="text-2xl font-bold text-gray-900 mb-2">Thank You!</h3>
-                  <p className="text-gray-600 mb-6">We have your request and will reach out within 24 hours.</p>
+                  <p className="text-gray-600 mb-6">We have your message and will reach out within 24 hours.</p>
                   <button onClick={() => setSubmitSuccess(false)} className="text-primary-600 font-medium hover:text-primary-700">
-                    Submit another request
+                    Send another message
                   </button>
                 </div>
               ) : (
                 <form onSubmit={handleSubmit}>
-                  <h3 className="text-2xl font-bold text-gray-900 mb-6">Request a Demo</h3>
+                  <h3 className="text-2xl font-bold text-gray-900 mb-6">Contact Us</h3>
                   <div className="space-y-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Business Name *</label>
@@ -445,7 +445,7 @@ export default function Home() {
                       <textarea rows={3} value={formData.message} onChange={(e) => setFormData({ ...formData, message: e.target.value })} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none resize-none" placeholder="Tell us how you want to use Emplora..." />
                     </div>
                     <button type="submit" disabled={isSubmitting} className="w-full py-4 bg-primary-500 text-white rounded-xl font-semibold hover:bg-primary-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
-                      {isSubmitting ? 'Sending...' : <>Request Demo <ArrowRight className="w-5 h-5" /></>}
+                      {isSubmitting ? 'Sending...' : <>Contact Us <ArrowRight className="w-5 h-5" /></>}
                     </button>
                   </div>
                 </form>
@@ -459,7 +459,7 @@ export default function Home() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid md:grid-cols-4 gap-8 mb-12">
             <div className="md:col-span-2">
-              <img src="/emplora-logo.png" alt="Emplora" className="h-10 w-auto mb-4 brightness-0 invert" />
+              <img src="/emplora-logo.png" alt="Emplora" className="h-10 w-auto mb-4" />
               <p className="text-gray-400 max-w-md">
                 Emplora gives modern teams one connected place to manage people, approvals, payroll, paystubs, exports, and backup-ready workforce data.
               </p>
