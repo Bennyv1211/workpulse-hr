@@ -574,7 +574,7 @@ def calculate_lateness(date_value: str, scheduled_start_time: Optional[str], act
     return {"late_status": minutes_late > 0, "minutes_late": minutes_late}
 
 
-def serialize_attendance_response(record: dict, employee_name: Optional[str] = None) -> AttendanceResponse:
+def serialize_attendance_response(record: dict, employee_name: Optional[str] = None) -> "AttendanceResponse":
     return AttendanceResponse(
         id=record["id"],
         employee_id=record["employee_id"],
