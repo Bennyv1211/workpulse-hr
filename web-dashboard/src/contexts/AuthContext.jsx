@@ -60,13 +60,15 @@ export function AuthProvider({ children }) {
     return userData
   }
 
-  const registerHr = async ({ email, password, first_name, last_name }) => {
+  const registerHr = async ({ email, password, first_name, last_name, security_question, security_answer }) => {
     const response = await api.post('/auth/register', {
       email,
       password,
       first_name,
       last_name,
       role: 'hr_admin',
+      security_question,
+      security_answer,
     })
 
     const { access_token, user: userData } = response.data

@@ -12,6 +12,8 @@ export default function Signup() {
     email: '',
     password: '',
     confirmPassword: '',
+    security_question: "What is your first pet's name?",
+    security_answer: '',
   })
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
@@ -26,8 +28,13 @@ export default function Signup() {
     event.preventDefault()
     setError('')
 
-    if (form.password.length < 6) {
-      setError('Password must be at least 6 characters.')
+    if (form.password.length < 8) {
+      setError('Password must be at least 8 characters.')
+      return
+    }
+
+    if (!/[A-Z]/.test(form.password) || !/\d/.test(form.password) || !/[^A-Za-z0-9]/.test(form.password)) {
+      setError('Password must include an uppercase letter, a number, and a special character.')
       return
     }
 
@@ -136,6 +143,24 @@ export default function Signup() {
                 <button type="button" className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" onClick={() => setShowConfirmPassword((current) => !current)}>
                   {showConfirmPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                 </button>
+              </div>
+            </label>
+
+            <label className="block">
+              <span className="block text-sm font-medium text-gray-700 mb-2">Security Question</span>
+              <select className="input" value={form.security_question} onChange={handleChange('security_question')} required>
+                <option>What is your first pet&apos;s name?</option>
+                <option>What city were you born in?</option>
+                <option>What was the name of your first school?</option>
+                <option>What is your mother’s maiden name?</option>
+              </select>
+            </label>
+
+            <label className="block">
+              <span className="block text-sm font-medium text-gray-700 mb-2">Security Answer</span>
+              <div className="relative">
+                <ShieldCheck className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <input className="input pl-10" value={form.security_answer} onChange={handleChange('security_answer')} required />
               </div>
             </label>
 

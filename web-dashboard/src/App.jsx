@@ -5,6 +5,7 @@ import Layout from './components/Layout'
 import Home from './pages/Home'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
+import ForgotPassword from './pages/ForgotPassword'
 import Dashboard from './pages/Dashboard'
 import Employees from './pages/Employees'
 import Leave from './pages/Leave'
@@ -73,6 +74,14 @@ function App() {
           element={
             <PublicOnlyRoute>
               <Signup />
+            </PublicOnlyRoute>
+          }
+        />
+        <Route
+          path="/forgot-password"
+          element={
+            <PublicOnlyRoute>
+              <ForgotPassword />
             </PublicOnlyRoute>
           }
         />

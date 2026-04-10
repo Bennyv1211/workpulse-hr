@@ -71,6 +71,8 @@ export default function Employees() {
     employee_id: '',
     start_date: '',
     date_of_birth: '',
+    regular_start_time: '09:00',
+    regular_end_time: '17:00',
     employment_type: 'Full-time',
     role: 'employee',
     temporary_password: '',
@@ -135,6 +137,8 @@ export default function Employees() {
         employment_type: data.employment_type || 'Full-time',
         start_date: data.start_date,
         date_of_birth: data.date_of_birth || null,
+        regular_start_time: data.regular_start_time || null,
+        regular_end_time: data.regular_end_time || null,
         hourly_rate: data.pay_type === 'hourly' ? Number(data.hourly_rate) : null,
         salary: data.pay_type === 'salary' ? Number(data.salary) : null,
         leave_balance: buildLeaveBalancePayload(data)
@@ -185,6 +189,8 @@ export default function Employees() {
         employment_type: 'Full-time',
         start_date: '2026-04-08',
         date_of_birth: '1995-02-14',
+        regular_start_time: '09:00',
+        regular_end_time: '17:00',
         pay_type: 'hourly',
         hourly_rate: 25,
         annual_salary: '',
@@ -202,7 +208,8 @@ export default function Employees() {
       { field: 'pay_type', required: 'yes', description: 'hourly or salary' },
       { field: 'hourly_rate', required: 'conditional', description: 'Required when pay_type is hourly' },
       { field: 'annual_salary', required: 'conditional', description: 'Required when pay_type is salary' },
-      { field: 'temporary_password', required: 'yes', description: 'At least 6 characters' },
+      { field: 'temporary_password', required: 'yes', description: 'At least 8 characters with uppercase, number, and special character' },
+      { field: 'regular_start_time / regular_end_time', required: 'no', description: 'Use HH:MM 24-hour format like 09:00 and 17:00' },
       { field: 'start_date / date_of_birth', required: 'start_date yes', description: 'Use YYYY-MM-DD format' },
     ]
 
@@ -293,6 +300,8 @@ export default function Employees() {
           employment_type: String(row.employment_type || 'Full-time').trim() || 'Full-time',
           start_date: start,
           date_of_birth: String(row.date_of_birth || '').trim() || null,
+          regular_start_time: String(row.regular_start_time || '09:00').trim() || null,
+          regular_end_time: String(row.regular_end_time || '17:00').trim() || null,
           hourly_rate: payType === 'hourly' ? Number(hourlyRate) : null,
           salary: payType === 'salary' ? Number(annualSalary) : null,
           leave_balance: leaveBalance,
@@ -332,8 +341,8 @@ export default function Employees() {
       return
     }
 
-    if (!formData.temporary_password || formData.temporary_password.trim().length < 6) {
-      setFormError('Temporary password is required and must be at least 6 characters.')
+    if (!formData.temporary_password || formData.temporary_password.trim().length < 8) {
+      setFormError('Temporary password is required and must be at least 8 characters.')
       return
     }
 
@@ -603,6 +612,17 @@ export default function Employees() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Regular Start Time</label>
+                  <input type="time" value={formData.regular_start_time} onChange={(e) => setFormData({ ...formData, regular_start_time: e.target.value })} className="input" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Regular End Time</label>
+                  <input type="time" value={formData.regular_end_time} onChange={(e) => setFormData({ ...formData, regular_end_time: e.target.value })} className="input" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Pay Type *</label>
                   <select value={formData.pay_type} onChange={(e) => setFormData({ ...formData, pay_type: e.target.value })} className="input" required>
                     <option value="hourly">Hourly</option>
@@ -640,7 +660,7 @@ export default function Employees() {
                   placeholder="Set a temporary password"
                   required
                 />
-                <p className="text-xs text-gray-500 mt-1">The employee can change this later from their profile.</p>
+                <p className="text-xs text-gray-500 mt-1">Use at least 8 characters with an uppercase letter, number, and special character. The employee can change this later from their profile.</p>
               </div>
 
               <div className="card bg-slate-50 border-slate-200 p-4">

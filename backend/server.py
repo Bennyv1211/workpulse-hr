@@ -476,12 +476,205 @@ def parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def normalize_time_string(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    for fmt in ("%H:%M", "%I:%M %p", "%I:%M%p", "%H:%M:%S"):
+        try:
+            parsed = datetime.strptime(text.upper(), fmt)
+            return parsed.strftime("%H:%M")
+        except ValueError:
+            continue
+
+    return None
+
+
+def parse_schedule_datetime(date_value: str, time_value: Optional[str]) -> Optional[datetime]:
+    normalized_time = normalize_time_string(time_value)
+    if not normalized_time:
+        return None
+
+    try:
+        return datetime.fromisoformat(f"{date_value}T{normalized_time}:00")
+    except Exception:
+        return None
+
+
+def calculate_time_range_hours(start_time: Optional[str], end_time: Optional[str]) -> float:
+    normalized_start = normalize_time_string(start_time)
+    normalized_end = normalize_time_string(end_time)
+    if not normalized_start or not normalized_end:
+        return 0.0
+
+    start_dt = parse_schedule_datetime("2026-01-01", normalized_start)
+    end_dt = parse_schedule_datetime("2026-01-01", normalized_end)
+    if not start_dt or not end_dt:
+        return 0.0
+
+    if end_dt <= start_dt:
+        end_dt += timedelta(days=1)
+
+    return round((end_dt - start_dt).total_seconds() / 3600, 2)
+
+
+def validate_password_strength(password: str):
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    if not re.search(r"[A-Z]", password):
+        raise HTTPException(status_code=400, detail="Password must include an uppercase letter")
+    if not re.search(r"\d", password):
+        raise HTTPException(status_code=400, detail="Password must include a number")
+    if not re.search(r"[^A-Za-z0-9]", password):
+        raise HTTPException(status_code=400, detail="Password must include a special character")
+
+
 def get_shift_local_now(shift: Dict[str, Any]) -> datetime:
     timezone_name = shift.get("clock_in", {}).get("timezone") or "UTC"
     try:
         return datetime.now(ZoneInfo(timezone_name))
     except Exception:
         return datetime.utcnow()
+
+
+async def get_schedule_for_employee_date(employee: dict, date_value: str) -> Optional[Dict[str, Any]]:
+    scheduled = await db.schedules.find_one({"employee_id": employee["id"], "date": date_value})
+    if scheduled:
+        return scheduled
+
+    regular_start = normalize_time_string(employee.get("regular_start_time"))
+    regular_end = normalize_time_string(employee.get("regular_end_time"))
+    if not regular_start or not regular_end:
+        return None
+
+    return {
+        "id": f"regular-{employee['id']}-{date_value}",
+        "employee_id": employee["id"],
+        "date": date_value,
+        "start_time": regular_start,
+        "end_time": regular_end,
+        "notes": "Regular hours of work",
+        "is_regular_hours": True,
+        "created_at": employee.get("created_at") or datetime.utcnow(),
+        "updated_at": employee.get("updated_at") or datetime.utcnow(),
+    }
+
+
+def calculate_lateness(date_value: str, scheduled_start_time: Optional[str], actual_clock_in: Optional[datetime]) -> Dict[str, Any]:
+    scheduled_dt = parse_schedule_datetime(date_value, scheduled_start_time)
+    if not scheduled_dt or not actual_clock_in:
+        return {"late_status": False, "minutes_late": 0}
+
+    actual_naive = actual_clock_in.replace(tzinfo=None) if actual_clock_in.tzinfo else actual_clock_in
+    minutes_late = max(0, int((actual_naive - scheduled_dt).total_seconds() // 60))
+    return {"late_status": minutes_late > 0, "minutes_late": minutes_late}
+
+
+def serialize_attendance_response(record: dict, employee_name: Optional[str] = None) -> AttendanceResponse:
+    return AttendanceResponse(
+        id=record["id"],
+        employee_id=record["employee_id"],
+        employee_name=employee_name,
+        date=record["date"],
+        clock_in=record.get("clock_in"),
+        clock_out=record.get("clock_out"),
+        clock_in_location=record.get("clock_in_location"),
+        clock_out_location=record.get("clock_out_location"),
+        clock_in_local=record.get("clock_in_local"),
+        clock_out_local=record.get("clock_out_local"),
+        scheduled_start_time=record.get("scheduled_start_time"),
+        scheduled_end_time=record.get("scheduled_end_time"),
+        actual_clock_in=record.get("actual_clock_in"),
+        actual_clock_out=record.get("actual_clock_out"),
+        late_status=bool(record.get("late_status", False)),
+        minutes_late=int(record.get("minutes_late", 0) or 0),
+        missed_clock_in_alert_sent=bool(record.get("missed_clock_in_alert_sent", False)),
+        timezone=record.get("timezone"),
+        total_hours=record.get("total_hours"),
+        status=record.get("status", "present"),
+        notes=record.get("notes"),
+        created_at=record.get("created_at", datetime.utcnow()),
+    )
+
+
+async def process_missed_clock_in_reminders():
+    now = datetime.utcnow()
+    today = now.strftime("%Y-%m-%d")
+    employees = await db.employees.find(
+        {
+            "status": "active",
+            "regular_start_time": {"$exists": True, "$ne": None},
+            "regular_end_time": {"$exists": True, "$ne": None},
+        }
+    ).to_list(1000)
+
+    for employee in employees:
+        schedule = await get_schedule_for_employee_date(employee, today)
+        if not schedule or not schedule.get("start_time"):
+            continue
+
+        scheduled_dt = parse_schedule_datetime(today, schedule.get("start_time"))
+        if not scheduled_dt or now <= scheduled_dt:
+            continue
+
+        attendance = await db.attendance.find_one({"employee_id": employee["id"], "date": today})
+        if attendance and attendance.get("clock_in"):
+            continue
+        if attendance and attendance.get("missed_clock_in_alert_sent"):
+            continue
+
+        if attendance:
+            await db.attendance.update_one(
+                {"id": attendance["id"]},
+                {
+                    "$set": {
+                        "scheduled_start_time": normalize_time_string(schedule.get("start_time")),
+                        "scheduled_end_time": normalize_time_string(schedule.get("end_time")),
+                        "missed_clock_in_alert_sent": True,
+                        "updated_at": now,
+                    }
+                },
+            )
+        else:
+            await db.attendance.insert_one(
+                {
+                    "id": str(uuid.uuid4()),
+                    "employee_id": employee["id"],
+                    "date": today,
+                    "clock_in": None,
+                    "clock_out": None,
+                    "clock_in_location": None,
+                    "clock_out_location": None,
+                    "clock_in_local": None,
+                    "clock_out_local": None,
+                    "scheduled_start_time": normalize_time_string(schedule.get("start_time")),
+                    "scheduled_end_time": normalize_time_string(schedule.get("end_time")),
+                    "actual_clock_in": None,
+                    "actual_clock_out": None,
+                    "late_status": False,
+                    "minutes_late": 0,
+                    "missed_clock_in_alert_sent": True,
+                    "timezone": None,
+                    "total_hours": None,
+                    "status": "scheduled",
+                    "notes": None,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            )
+
+        start_label = schedule.get("start_time")
+        await notify_employee_by_employee_id(
+            employee["id"],
+            "Scheduled shift reminder",
+            f"You are scheduled to start at {start_label} and have not clocked in.",
+            notification_type="missed_clock_in",
+            data={"employee_id": employee["id"], "date": today, "scheduled_start_time": start_label},
+        )
 
 
 async def process_expired_breaks():
@@ -545,8 +738,16 @@ async def process_after_hours_clock_out_reminders():
         if shift.get("after_hours_reminder_sent_at"):
             continue
 
+        employee = await db.employees.find_one({"id": shift.get("employee_id")})
+        if not employee:
+            continue
+
         local_now = get_shift_local_now(shift)
-        if local_now.hour < 17 or (local_now.hour == 17 and local_now.minute < 5):
+        scheduled_end_time = normalize_time_string(employee.get("regular_end_time")) or "17:00"
+        scheduled_end_dt = parse_schedule_datetime(shift.get("date"), scheduled_end_time)
+        if not scheduled_end_dt:
+            continue
+        if local_now.replace(tzinfo=None) < (scheduled_end_dt + timedelta(minutes=5)):
             continue
 
         await db.shifts.update_one(
@@ -567,6 +768,7 @@ async def background_notification_worker():
     while True:
         try:
             await process_expired_breaks()
+            await process_missed_clock_in_reminders()
             await process_after_hours_clock_out_reminders()
         except Exception as exc:
             logger.warning("Background notification worker error: %s", exc)
@@ -639,6 +841,8 @@ class UserCreate(BaseModel):
     first_name: str
     last_name: str
     role: str = "employee"
+    security_question: str
+    security_answer: str
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -649,6 +853,18 @@ class PasswordChange(BaseModel):
     current_password: str
     new_password: str
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class VerifySecurityAnswerRequest(BaseModel):
+    email: EmailStr
+    security_answer: str
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    reset_token: str
+    new_password: str
+
 class UserResponse(BaseModel):
     id: str
     email: str
@@ -656,6 +872,7 @@ class UserResponse(BaseModel):
     last_name: str
     role: str
     employee_id: Optional[str] = None
+    security_question: Optional[str] = None
     onboarding_completed: bool = False
     created_at: datetime
 
@@ -735,6 +952,8 @@ class EmployeeCreate(BaseModel):
     employment_type: str = "Full-time"
     start_date: str
     date_of_birth: Optional[str] = None
+    regular_start_time: Optional[str] = None
+    regular_end_time: Optional[str] = None
     address: Optional[str] = None
     city: Optional[str] = None
     state: Optional[str] = None
@@ -765,6 +984,8 @@ class EmployeeUpdate(BaseModel):
     employment_type: Optional[str] = None
     start_date: Optional[str] = None
     date_of_birth: Optional[str] = None
+    regular_start_time: Optional[str] = None
+    regular_end_time: Optional[str] = None
     address: Optional[str] = None
     city: Optional[str] = None
     state: Optional[str] = None
@@ -799,6 +1020,8 @@ class EmployeeResponse(BaseModel):
     start_date: str
     status: str = "active"
     date_of_birth: Optional[str] = None
+    regular_start_time: Optional[str] = None
+    regular_end_time: Optional[str] = None
     address: Optional[str] = None
     city: Optional[str] = None
     state: Optional[str] = None
@@ -891,6 +1114,13 @@ class AttendanceResponse(BaseModel):
     clock_out_location: Optional[Dict[str, float]] = None
     clock_in_local: Optional[str] = None
     clock_out_local: Optional[str] = None
+    scheduled_start_time: Optional[str] = None
+    scheduled_end_time: Optional[str] = None
+    actual_clock_in: Optional[str] = None
+    actual_clock_out: Optional[str] = None
+    late_status: bool = False
+    minutes_late: int = 0
+    missed_clock_in_alert_sent: bool = False
     timezone: Optional[str] = None
     total_hours: Optional[float] = None
     status: str = "present"
@@ -916,6 +1146,213 @@ class AttendanceManualCreate(BaseModel):
     clock_out: Optional[str] = None
     status: str = "present"
     notes: Optional[str] = None
+
+
+class ScheduleCreate(BaseModel):
+    employee_id: str
+    date: str
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ScheduleUpdate(BaseModel):
+    schedule_id: str
+    date: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class DepartmentScheduleApply(BaseModel):
+    department_id: str
+    week_start_date: str
+    start_time: str
+    end_time: str
+    weekdays: List[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4])
+    notes: Optional[str] = None
+
+
+class ScheduleEntryResponse(BaseModel):
+    id: str
+    employee_id: str
+    employee_name: Optional[str] = None
+    department_id: Optional[str] = None
+    date: str
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    total_hours: float = 0
+    notes: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+async def build_schedule_entry_response(schedule: dict) -> ScheduleEntryResponse:
+    employee = await db.employees.find_one({"id": schedule["employee_id"]})
+    employee_name = None
+    department_id = schedule.get("department_id")
+    if employee:
+        employee_name = f"{employee.get('first_name', '')} {employee.get('last_name', '')}".strip()
+        department_id = department_id or employee.get("department_id")
+
+    return ScheduleEntryResponse(
+        id=schedule["id"],
+        employee_id=schedule["employee_id"],
+        employee_name=employee_name,
+        department_id=department_id,
+        date=schedule["date"],
+        start_time=normalize_time_string(schedule.get("start_time")),
+        end_time=normalize_time_string(schedule.get("end_time")),
+        total_hours=calculate_time_range_hours(schedule.get("start_time"), schedule.get("end_time")),
+        notes=schedule.get("notes"),
+        created_at=schedule.get("created_at", datetime.utcnow()),
+        updated_at=schedule.get("updated_at", datetime.utcnow()),
+    )
+
+# Payroll Models
+# ===== Schedule Routes =====
+@api_router.post("/schedule/create", response_model=ScheduleEntryResponse)
+async def create_schedule_entry(payload: ScheduleCreate, current_user: dict = Depends(require_manager)):
+    employee = await db.employees.find_one({"id": payload.employee_id, "status": "active"})
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    normalized_start = normalize_time_string(payload.start_time)
+    normalized_end = normalize_time_string(payload.end_time)
+    if (payload.start_time and not normalized_start) or (payload.end_time and not normalized_end):
+        raise HTTPException(status_code=400, detail="Invalid schedule time format")
+
+    existing = await db.schedules.find_one({"employee_id": payload.employee_id, "date": payload.date})
+    now = datetime.utcnow()
+    schedule_doc = {
+        "employee_id": payload.employee_id,
+        "department_id": employee.get("department_id"),
+        "date": payload.date,
+        "start_time": normalized_start,
+        "end_time": normalized_end,
+        "notes": payload.notes,
+        "updated_at": now,
+    }
+
+    if existing:
+        await db.schedules.update_one({"id": existing["id"]}, {"$set": schedule_doc})
+        saved = await db.schedules.find_one({"id": existing["id"]})
+    else:
+        schedule_id = str(uuid.uuid4())
+        schedule_doc.update({"id": schedule_id, "created_at": now})
+        await db.schedules.insert_one(schedule_doc)
+        saved = schedule_doc
+
+    await log_activity(current_user["id"], "schedule_created", f"Schedule assigned for employee {payload.employee_id} on {payload.date}")
+    return await build_schedule_entry_response(saved)
+
+
+@api_router.put("/schedule/update", response_model=ScheduleEntryResponse)
+async def update_schedule_entry(payload: ScheduleUpdate, current_user: dict = Depends(require_manager)):
+    existing = await db.schedules.find_one({"id": payload.schedule_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Schedule entry not found")
+
+    update_fields = payload.dict(exclude_unset=True, exclude={"schedule_id"})
+    if "start_time" in update_fields:
+        update_fields["start_time"] = normalize_time_string(update_fields["start_time"])
+        if payload.start_time and not update_fields["start_time"]:
+            raise HTTPException(status_code=400, detail="Invalid start time")
+    if "end_time" in update_fields:
+        update_fields["end_time"] = normalize_time_string(update_fields["end_time"])
+        if payload.end_time and not update_fields["end_time"]:
+            raise HTTPException(status_code=400, detail="Invalid end time")
+    update_fields["updated_at"] = datetime.utcnow()
+
+    await db.schedules.update_one({"id": payload.schedule_id}, {"$set": update_fields})
+    saved = await db.schedules.find_one({"id": payload.schedule_id})
+    await log_activity(current_user["id"], "schedule_updated", f"Schedule updated for employee {saved['employee_id']} on {saved['date']}")
+    return await build_schedule_entry_response(saved)
+
+
+@api_router.get("/schedule/employee/{employee_id}", response_model=List[ScheduleEntryResponse])
+async def get_employee_schedule(
+    employee_id: str,
+    week_start: Optional[str] = None,
+    current_user: dict = Depends(get_current_user),
+):
+    if current_user["role"] == "employee":
+        employee = await db.employees.find_one({"user_id": current_user["id"]}) or await db.employees.find_one({"email": current_user["email"]})
+        if not employee or employee["id"] != employee_id:
+            raise HTTPException(status_code=403, detail="You can only view your own schedule")
+
+    query: Dict[str, Any] = {"employee_id": employee_id}
+    if week_start:
+        start_dt = datetime.fromisoformat(week_start)
+        end_dt = start_dt + timedelta(days=6)
+        query["date"] = {"$gte": start_dt.strftime("%Y-%m-%d"), "$lte": end_dt.strftime("%Y-%m-%d")}
+
+    schedules = await db.schedules.find(query).sort("date", 1).to_list(100)
+    return [await build_schedule_entry_response(schedule) for schedule in schedules]
+
+
+@api_router.get("/schedule/week/{date_value}", response_model=List[ScheduleEntryResponse])
+async def get_schedule_week(date_value: str, current_user: dict = Depends(get_current_user)):
+    start_dt = datetime.fromisoformat(date_value)
+    end_dt = start_dt + timedelta(days=6)
+    query: Dict[str, Any] = {
+        "date": {"$gte": start_dt.strftime("%Y-%m-%d"), "$lte": end_dt.strftime("%Y-%m-%d")}
+    }
+
+    if current_user["role"] == "employee":
+        employee = await db.employees.find_one({"user_id": current_user["id"]}) or await db.employees.find_one({"email": current_user["email"]})
+        if not employee:
+            return []
+        query["employee_id"] = employee["id"]
+    elif current_user["role"] == "manager":
+        manager_employee = await db.employees.find_one({"user_id": current_user["id"]}) or await db.employees.find_one({"email": current_user["email"]})
+        if not manager_employee:
+            return []
+        query["department_id"] = manager_employee.get("department_id")
+
+    schedules = await db.schedules.find(query).sort([("date", 1), ("employee_id", 1)]).to_list(500)
+    return [await build_schedule_entry_response(schedule) for schedule in schedules]
+
+
+@api_router.post("/schedule/department/apply")
+async def apply_schedule_to_department(payload: DepartmentScheduleApply, current_user: dict = Depends(require_manager)):
+    department = await db.departments.find_one({"id": payload.department_id})
+    if not department:
+        raise HTTPException(status_code=404, detail="Department not found")
+
+    normalized_start = normalize_time_string(payload.start_time)
+    normalized_end = normalize_time_string(payload.end_time)
+    if not normalized_start or not normalized_end:
+        raise HTTPException(status_code=400, detail="Invalid schedule time format")
+
+    week_start = datetime.fromisoformat(payload.week_start_date)
+    employees = await db.employees.find({"department_id": payload.department_id, "status": "active"}).to_list(500)
+    applied_count = 0
+    now = datetime.utcnow()
+
+    for employee in employees:
+        for weekday in payload.weekdays:
+            shift_date = (week_start + timedelta(days=int(weekday))).strftime("%Y-%m-%d")
+            existing = await db.schedules.find_one({"employee_id": employee["id"], "date": shift_date})
+            schedule_doc = {
+                "employee_id": employee["id"],
+                "department_id": payload.department_id,
+                "date": shift_date,
+                "start_time": normalized_start,
+                "end_time": normalized_end,
+                "notes": payload.notes,
+                "updated_at": now,
+            }
+            if existing:
+                await db.schedules.update_one({"id": existing["id"]}, {"$set": schedule_doc})
+            else:
+                schedule_doc.update({"id": str(uuid.uuid4()), "created_at": now})
+                await db.schedules.insert_one(schedule_doc)
+            applied_count += 1
+
+    await log_activity(current_user["id"], "department_schedule_applied", f"Applied schedule to department {payload.department_id}")
+    return {"message": "Department schedule applied", "applied_count": applied_count}
+
 
 # Payroll Models
 class PayrollCreate(BaseModel):
@@ -1193,6 +1630,103 @@ def normalize_employee_role(role: Optional[str]) -> str:
         raise HTTPException(status_code=400, detail="Invalid employee role")
     return normalized
 
+
+def validate_password_strength(password: str):
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    if not re.search(r"[A-Z]", password):
+        raise HTTPException(status_code=400, detail="Password must include an uppercase letter")
+    if not re.search(r"\d", password):
+        raise HTTPException(status_code=400, detail="Password must include a number")
+    if not re.search(r"[^A-Za-z0-9]", password):
+        raise HTTPException(status_code=400, detail="Password must include a special character")
+
+
+def normalize_time_value(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+
+    cleaned = str(value).strip()
+    patterns = ["%H:%M", "%I:%M %p", "%I:%M%p", "%H:%M:%S"]
+    for pattern in patterns:
+        try:
+            parsed = datetime.strptime(cleaned.upper(), pattern)
+            return parsed.strftime("%H:%M")
+        except ValueError:
+            continue
+    raise HTTPException(status_code=400, detail=f"Invalid time format: {value}")
+
+
+def calculate_schedule_hours(start_time: Optional[str], end_time: Optional[str]) -> float:
+    if not start_time or not end_time:
+        return 0.0
+    start = datetime.strptime(start_time, "%H:%M")
+    end = datetime.strptime(end_time, "%H:%M")
+    hours = (end - start).total_seconds() / 3600
+    return round(max(hours, 0), 2)
+
+
+async def get_employee_schedule_for_date(employee: dict, date_value: str) -> Dict[str, Optional[str]]:
+    schedule = await db.schedules.find_one({"employee_id": employee["id"], "date": date_value})
+    if schedule:
+        return {
+            "scheduled_start_time": schedule.get("start_time"),
+            "scheduled_end_time": schedule.get("end_time"),
+            "schedule_id": schedule.get("id"),
+        }
+
+    return {
+        "scheduled_start_time": employee.get("regular_start_time"),
+        "scheduled_end_time": employee.get("regular_end_time"),
+        "schedule_id": None,
+    }
+
+
+def get_local_date_string(local_time: Optional[str], fallback: datetime) -> str:
+    parsed_local = parse_iso_datetime(local_time)
+    if parsed_local:
+        return parsed_local.date().isoformat()
+    return fallback.strftime("%Y-%m-%d")
+
+
+def calculate_late_metrics(
+    date_value: str,
+    scheduled_start_time: Optional[str],
+    local_time: Optional[str],
+    fallback_time: datetime,
+) -> Dict[str, Any]:
+    if not scheduled_start_time:
+        return {"late_status": False, "minutes_late": 0}
+
+    actual_local_dt = parse_iso_datetime(local_time) or fallback_time
+    scheduled_dt = datetime.strptime(f"{date_value} {scheduled_start_time}", "%Y-%m-%d %H:%M")
+    actual_naive = actual_local_dt.replace(tzinfo=None) if actual_local_dt.tzinfo else actual_local_dt
+
+    if actual_naive <= scheduled_dt:
+        return {"late_status": False, "minutes_late": 0}
+
+    minutes_late = int((actual_naive - scheduled_dt).total_seconds() // 60)
+    return {
+        "late_status": minutes_late > 0,
+        "minutes_late": max(minutes_late, 0),
+    }
+
+
+def build_schedule_response(schedule: dict, employee_name: Optional[str] = None) -> ScheduleEntryResponse:
+    return ScheduleEntryResponse(
+        id=schedule["id"],
+        employee_id=schedule["employee_id"],
+        employee_name=employee_name,
+        department_id=schedule.get("department_id"),
+        date=schedule["date"],
+        start_time=schedule.get("start_time"),
+        end_time=schedule.get("end_time"),
+        total_hours=calculate_schedule_hours(schedule.get("start_time"), schedule.get("end_time")),
+        notes=schedule.get("notes"),
+        created_at=schedule["created_at"],
+        updated_at=schedule["updated_at"],
+    )
+
 async def ensure_employee_user_account(
     employee_id: str,
     email: str,
@@ -1204,6 +1738,9 @@ async def ensure_employee_user_account(
 ):
     normalized_email = email.lower()
     user = None
+
+    if temporary_password:
+        validate_password_strength(temporary_password)
 
     if existing_user_id:
         user = await db.users.find_one({"id": existing_user_id})
@@ -1237,6 +1774,12 @@ async def ensure_employee_user_account(
         "last_name": last_name,
         "role": role,
         "employee_id": employee_id,
+        "security_question": None,
+        "security_answer_hash": None,
+        "security_reset_failed_attempts": 0,
+        "security_reset_locked_until": None,
+        "security_reset_token": None,
+        "security_reset_token_expires_at": None,
         "onboarding_completed": False,
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow(),
@@ -1246,15 +1789,25 @@ async def ensure_employee_user_account(
 async def sync_shift_clock_in_to_attendance(employee: dict, local_time: Optional[str], timezone: Optional[str], latitude: Optional[float], longitude: Optional[float], clock_in_time: datetime):
     today = clock_in_time.strftime("%Y-%m-%d")
     existing = await db.attendance.find_one({"employee_id": employee["id"], "date": today})
+    schedule = await get_schedule_for_employee_date(employee, today)
+    scheduled_start_time = normalize_time_string((schedule or {}).get("start_time"))
+    scheduled_end_time = normalize_time_string((schedule or {}).get("end_time"))
+    lateness = calculate_lateness(today, scheduled_start_time, clock_in_time)
 
     payload = {
         "employee_id": employee["id"],
         "date": today,
         "clock_in": clock_in_time,
         "clock_in_local": local_time,
+        "actual_clock_in": local_time or clock_in_time.isoformat(),
         "timezone": timezone,
         "clock_in_location": {"latitude": latitude, "longitude": longitude} if latitude is not None and longitude is not None else None,
-        "status": "present",
+        "scheduled_start_time": scheduled_start_time,
+        "scheduled_end_time": scheduled_end_time,
+        "late_status": lateness["late_status"],
+        "minutes_late": lateness["minutes_late"],
+        "missed_clock_in_alert_sent": bool(existing.get("missed_clock_in_alert_sent")) if existing else False,
+        "status": "late" if lateness["late_status"] else "present",
         "updated_at": datetime.utcnow(),
     }
 
@@ -1282,10 +1835,11 @@ async def sync_shift_clock_out_to_attendance(employee: dict, local_time: Optiona
     payload = {
         "clock_out": clock_out_time,
         "clock_out_local": local_time,
+        "actual_clock_out": local_time or clock_out_time.isoformat(),
         "timezone": timezone,
         "clock_out_location": {"latitude": latitude, "longitude": longitude} if latitude is not None and longitude is not None else None,
         "total_hours": work_hours,
-        "status": "present",
+        "status": "late" if existing and existing.get("late_status") else "present",
         "updated_at": datetime.utcnow(),
     }
 
@@ -1301,6 +1855,9 @@ async def sync_shift_clock_out_to_attendance(employee: dict, local_time: Optiona
         "clock_in": None,
         "clock_in_local": None,
         "clock_in_location": None,
+        "scheduled_start_time": normalize_time_string(employee.get("regular_start_time")),
+        "scheduled_end_time": normalize_time_string(employee.get("regular_end_time")),
+        "actual_clock_in": None,
         "notes": None,
         "created_at": datetime.utcnow(),
     })
@@ -1313,6 +1870,7 @@ async def register(user_data: UserCreate):
     existing_user = await db.users.find_one({"email": user_data.email.lower()})
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
+    validate_password_strength(user_data.password)
     
     user_id = str(uuid.uuid4())
     user = {
@@ -1322,6 +1880,12 @@ async def register(user_data: UserCreate):
         "first_name": user_data.first_name,
         "last_name": user_data.last_name,
         "role": user_data.role,
+        "security_question": user_data.security_question,
+        "security_answer_hash": get_password_hash(user_data.security_answer.strip().lower()),
+        "security_reset_failed_attempts": 0,
+        "security_reset_locked_until": None,
+        "security_reset_token": None,
+        "security_reset_token_expires_at": None,
         "employee_id": None,
         "onboarding_completed": False,
         "created_at": datetime.utcnow(),
@@ -1341,6 +1905,7 @@ async def register(user_data: UserCreate):
             last_name=user["last_name"],
             role=user["role"],
             employee_id=user["employee_id"],
+            security_question=user.get("security_question"),
             onboarding_completed=user["onboarding_completed"],
             created_at=user["created_at"]
         )
@@ -1370,6 +1935,7 @@ async def login(credentials: UserLogin):
             last_name=user["last_name"],
             role=user["role"],
             employee_id=user.get("employee_id"),
+            security_question=user.get("security_question"),
             onboarding_completed=user.get("onboarding_completed", False),
             created_at=user["created_at"]
         )
@@ -1384,6 +1950,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         last_name=current_user["last_name"],
         role=current_user["role"],
         employee_id=current_user.get("employee_id"),
+        security_question=current_user.get("security_question"),
         onboarding_completed=current_user.get("onboarding_completed", False),
         created_at=current_user["created_at"]
     )
@@ -1434,9 +2001,7 @@ async def change_password(
 ):
     if not verify_password(password_data.current_password, current_user["password_hash"]):
         raise HTTPException(status_code=400, detail="Invalid current password")
-    
-    if len(password_data.new_password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    validate_password_strength(password_data.new_password)
     
     await db.users.update_one(
         {"id": current_user["id"]},
@@ -1444,6 +2009,92 @@ async def change_password(
     )
     await log_activity(current_user["id"], "password_changed", "Password changed")
     return {"message": "Password changed successfully"}
+
+
+@api_router.post("/auth/forgot-password")
+async def forgot_password(payload: ForgotPasswordRequest):
+    user = await db.users.find_one({"email": payload.email.lower()})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    locked_until = user.get("security_reset_locked_until")
+    if locked_until and isinstance(locked_until, datetime) and locked_until > datetime.utcnow():
+        raise HTTPException(status_code=429, detail="Too many failed attempts. Try again later.")
+
+    if not user.get("security_question"):
+        raise HTTPException(status_code=400, detail="Security question is not configured for this account")
+
+    return {"email": user["email"], "security_question": user["security_question"]}
+
+
+@api_router.post("/auth/verify-security-answer")
+async def verify_security_answer(payload: VerifySecurityAnswerRequest):
+    user = await db.users.find_one({"email": payload.email.lower()})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    now = datetime.utcnow()
+    locked_until = user.get("security_reset_locked_until")
+    if locked_until and isinstance(locked_until, datetime) and locked_until > now:
+        raise HTTPException(status_code=429, detail="Too many failed attempts. Try again later.")
+
+    answer_hash = user.get("security_answer_hash")
+    is_valid = bool(answer_hash) and verify_password(payload.security_answer.strip().lower(), answer_hash)
+    if not is_valid:
+        failed_attempts = int(user.get("security_reset_failed_attempts", 0) or 0) + 1
+        update_fields: Dict[str, Any] = {
+            "security_reset_failed_attempts": failed_attempts,
+            "updated_at": now,
+        }
+        if failed_attempts >= 5:
+            update_fields["security_reset_locked_until"] = now + timedelta(minutes=15)
+        await db.users.update_one({"id": user["id"]}, {"$set": update_fields})
+        raise HTTPException(status_code=400, detail="Incorrect security answer")
+
+    reset_token = str(uuid.uuid4())
+    await db.users.update_one(
+        {"id": user["id"]},
+        {
+            "$set": {
+                "security_reset_failed_attempts": 0,
+                "security_reset_locked_until": None,
+                "security_reset_token": reset_token,
+                "security_reset_token_expires_at": now + timedelta(minutes=15),
+                "updated_at": now,
+            }
+        },
+    )
+    return {"reset_token": reset_token, "expires_in_minutes": 15}
+
+
+@api_router.post("/auth/reset-password")
+async def reset_password(payload: ResetPasswordRequest):
+    user = await db.users.find_one({"email": payload.email.lower()})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    token = user.get("security_reset_token")
+    expires_at = user.get("security_reset_token_expires_at")
+    if token != payload.reset_token or not expires_at or expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Reset token is invalid or expired")
+
+    validate_password_strength(payload.new_password)
+
+    await db.users.update_one(
+        {"id": user["id"]},
+        {
+            "$set": {
+                "password_hash": get_password_hash(payload.new_password),
+                "security_reset_failed_attempts": 0,
+                "security_reset_locked_until": None,
+                "security_reset_token": None,
+                "security_reset_token_expires_at": None,
+                "updated_at": datetime.utcnow(),
+            }
+        },
+    )
+    await log_activity(user["id"], "password_reset", "Password reset using security question verification")
+    return {"message": "Password reset successfully"}
 
 # ===== Shift/Break Management Routes (NEW SIMPLIFIED) =====
 
@@ -2486,6 +3137,8 @@ async def create_employee(emp: EmployeeCreate, current_user: dict = Depends(requ
         "work_location": emp.work_location,
         "employment_type": emp.employment_type,
         "start_date": emp.start_date,
+        "regular_start_time": normalize_time_string(emp.regular_start_time),
+        "regular_end_time": normalize_time_string(emp.regular_end_time),
         "status": "active",
         "date_of_birth": emp.date_of_birth,
         "address": emp.address,
@@ -2525,6 +3178,8 @@ async def create_employee(emp: EmployeeCreate, current_user: dict = Depends(requ
         work_location=emp.work_location,
         employment_type=emp.employment_type,
         start_date=emp.start_date,
+        regular_start_time=normalize_time_string(emp.regular_start_time),
+        regular_end_time=normalize_time_string(emp.regular_end_time),
         status="active",
         date_of_birth=emp.date_of_birth,
         address=emp.address,
@@ -2592,6 +3247,8 @@ async def get_employees(
             work_location=emp.get("work_location"),
             employment_type=emp["employment_type"],
             start_date=emp["start_date"],
+            regular_start_time=emp.get("regular_start_time"),
+            regular_end_time=emp.get("regular_end_time"),
             status=emp["status"],
             date_of_birth=emp.get("date_of_birth"),
             address=emp.get("address"),
@@ -2649,6 +3306,8 @@ async def get_employee(emp_id: str, current_user: dict = Depends(get_current_use
         work_location=emp.get("work_location"),
         employment_type=emp["employment_type"],
         start_date=emp["start_date"],
+        regular_start_time=emp.get("regular_start_time"),
+        regular_end_time=emp.get("regular_end_time"),
         status=emp["status"],
         date_of_birth=emp.get("date_of_birth"),
         address=emp.get("address"),
@@ -2811,6 +3470,11 @@ async def update_employee(emp_id: str, emp_data: EmployeeUpdate, current_user: d
 
     if "role" in update_dict and update_dict["role"] is not None:
         update_dict["role"] = normalize_employee_role(update_dict["role"])
+
+    if "regular_start_time" in update_dict:
+        update_dict["regular_start_time"] = normalize_time_string(update_dict["regular_start_time"])
+    if "regular_end_time" in update_dict:
+        update_dict["regular_end_time"] = normalize_time_string(update_dict["regular_end_time"])
 
     if "leave_balance" in update_dict and update_dict["leave_balance"] is not None:
         update_dict["leave_balance"] = {
@@ -3243,11 +3907,13 @@ async def clock_in(data: AttendanceClockIn, current_user: dict = Depends(get_cur
             now = datetime.utcnow()
     else:
         now = datetime.utcnow()
-    
-    att_id = str(uuid.uuid4())
-    status = "present"
-    if now.hour >= 9 and now.minute > 15:
-        status = "late"
+
+    schedule = await get_schedule_for_employee_date(employee, today)
+    scheduled_start_time = normalize_time_string((schedule or {}).get("start_time"))
+    scheduled_end_time = normalize_time_string((schedule or {}).get("end_time"))
+    lateness = calculate_lateness(today, scheduled_start_time, now)
+    att_id = existing["id"] if existing else str(uuid.uuid4())
+    status = "late" if lateness["late_status"] else "present"
     
     attendance = {
         "id": att_id,
@@ -3259,32 +3925,26 @@ async def clock_in(data: AttendanceClockIn, current_user: dict = Depends(get_cur
         "clock_out_location": None,
         "clock_in_local": data.local_time,
         "clock_out_local": None,
+        "scheduled_start_time": scheduled_start_time,
+        "scheduled_end_time": scheduled_end_time,
+        "actual_clock_in": data.local_time or now.isoformat(),
+        "actual_clock_out": None,
+        "late_status": lateness["late_status"],
+        "minutes_late": lateness["minutes_late"],
+        "missed_clock_in_alert_sent": bool(existing.get("missed_clock_in_alert_sent")) if existing else False,
         "timezone": data.timezone,
         "total_hours": None,
         "status": status,
         "notes": data.notes,
-        "created_at": now
+        "created_at": existing.get("created_at", now) if existing else now,
+        "updated_at": now,
     }
-    await db.attendance.insert_one(attendance)
+    if existing:
+        await db.attendance.update_one({"id": existing["id"]}, {"$set": attendance})
+    else:
+        await db.attendance.insert_one(attendance)
     await log_activity(current_user["id"], "clock_in", f"Clocked in at {now.strftime('%H:%M')} ({data.timezone or 'UTC'})")
-    
-    return AttendanceResponse(
-        id=att_id,
-        employee_id=employee["id"],
-        employee_name=f"{employee['first_name']} {employee['last_name']}",
-        date=today,
-        clock_in=now,
-        clock_out=None,
-        clock_in_location=attendance["clock_in_location"],
-        clock_out_location=None,
-        clock_in_local=data.local_time,
-        clock_out_local=None,
-        timezone=data.timezone,
-        total_hours=None,
-        status=status,
-        notes=data.notes,
-        created_at=now
-    )
+    return serialize_attendance_response(attendance, f"{employee['first_name']} {employee['last_name']}")
 
 @api_router.post("/attendance/clock-out", response_model=AttendanceResponse)
 async def clock_out(data: AttendanceClockOut, current_user: dict = Depends(get_current_user)):
@@ -3329,29 +3989,15 @@ async def clock_out(data: AttendanceClockOut, current_user: dict = Depends(get_c
             "clock_out": now,
             "clock_out_location": {"latitude": data.latitude, "longitude": data.longitude} if data.latitude else None,
             "clock_out_local": data.local_time,
+            "actual_clock_out": data.local_time or now.isoformat(),
             "total_hours": total_hours,
-            "notes": data.notes or attendance.get("notes")
+            "notes": data.notes or attendance.get("notes"),
+            "updated_at": now,
         }}
     )
     await log_activity(current_user["id"], "clock_out", f"Clocked out at {now.strftime('%H:%M')} ({data.timezone or 'UTC'}), worked {total_hours}h")
-    
-    return AttendanceResponse(
-        id=attendance["id"],
-        employee_id=employee["id"],
-        employee_name=f"{employee['first_name']} {employee['last_name']}",
-        date=today,
-        clock_in=clock_in,
-        clock_out=now,
-        clock_in_location=attendance.get("clock_in_location"),
-        clock_out_location={"latitude": data.latitude, "longitude": data.longitude} if data.latitude else None,
-        clock_in_local=attendance.get("clock_in_local"),
-        clock_out_local=data.local_time,
-        timezone=attendance.get("timezone") or data.timezone,
-        total_hours=total_hours,
-        status=attendance["status"],
-        notes=data.notes or attendance.get("notes"),
-        created_at=attendance["created_at"]
-    )
+    updated = await db.attendance.find_one({"id": attendance["id"]})
+    return serialize_attendance_response(updated, f"{employee['first_name']} {employee['last_name']}")
 
 @api_router.get("/attendance/today", response_model=Optional[AttendanceResponse])
 async def get_today_attendance(current_user: dict = Depends(get_current_user)):
@@ -3367,20 +4013,7 @@ async def get_today_attendance(current_user: dict = Depends(get_current_user)):
     if not attendance:
         return None
     
-    return AttendanceResponse(
-        id=attendance["id"],
-        employee_id=employee["id"],
-        employee_name=f"{employee['first_name']} {employee['last_name']}",
-        date=today,
-        clock_in=attendance.get("clock_in"),
-        clock_out=attendance.get("clock_out"),
-        clock_in_location=attendance.get("clock_in_location"),
-        clock_out_location=attendance.get("clock_out_location"),
-        total_hours=attendance.get("total_hours"),
-        status=attendance["status"],
-        notes=attendance.get("notes"),
-        created_at=attendance["created_at"]
-    )
+    return serialize_attendance_response(attendance, f"{employee['first_name']} {employee['last_name']}")
 
 @api_router.get("/attendance", response_model=List[AttendanceResponse])
 async def get_attendance(
@@ -3442,45 +4075,38 @@ async def get_attendance(
     }
     
     return [
-        AttendanceResponse(
-            id=r["id"],
-            employee_id=r["employee_id"],
-            employee_name=employees.get(r["employee_id"]),
-            date=r["date"],
-            clock_in=r.get("clock_in"),
-            clock_out=r.get("clock_out"),
-            clock_in_location=r.get("clock_in_location"),
-            clock_out_location=r.get("clock_out_location"),
-            total_hours=(
-                r.get("total_hours")
-                if r.get("total_hours") not in [None, 0] or r.get("clock_out")
-                else round(
-                    max(
-                        0,
-                        (
-                            datetime.utcnow()
-                            - (
-                                active_shift_map.get((r["employee_id"], r["date"]), {}).get("clock_in", {}).get("timestamp")
-                                if active_shift_map.get((r["employee_id"], r["date"]))
-                                else r.get("clock_in")
-                            )
-                        ).total_seconds()
-                        - active_shift_map.get((r["employee_id"], r["date"]), {}).get("total_break_seconds", 0)
-                    ) / 3600,
-                    2,
-                )
-                if (
-                    not r.get("clock_out")
-                    and (
-                        active_shift_map.get((r["employee_id"], r["date"]), {}).get("clock_in", {}).get("timestamp")
-                        or r.get("clock_in")
+        serialize_attendance_response(
+            {
+                **r,
+                "total_hours": (
+                    r.get("total_hours")
+                    if r.get("total_hours") not in [None, 0] or r.get("clock_out")
+                    else round(
+                        max(
+                            0,
+                            (
+                                datetime.utcnow()
+                                - (
+                                    active_shift_map.get((r["employee_id"], r["date"]), {}).get("clock_in", {}).get("timestamp")
+                                    if active_shift_map.get((r["employee_id"], r["date"]))
+                                    else r.get("clock_in")
+                                )
+                            ).total_seconds()
+                            - active_shift_map.get((r["employee_id"], r["date"]), {}).get("total_break_seconds", 0)
+                        ) / 3600,
+                        2,
                     )
-                )
-                else r.get("total_hours")
-            ),
-            status=r["status"],
-            notes=r.get("notes"),
-            created_at=r["created_at"]
+                    if (
+                        not r.get("clock_out")
+                        and (
+                            active_shift_map.get((r["employee_id"], r["date"]), {}).get("clock_in", {}).get("timestamp")
+                            or r.get("clock_in")
+                        )
+                    )
+                    else r.get("total_hours")
+                ),
+            },
+            employees.get(r["employee_id"]),
         )
         for r in records
     ]
@@ -3498,6 +4124,10 @@ async def create_manual_attendance(data: AttendanceManualCreate, current_user: d
     if data.clock_out:
         clock_out = datetime.strptime(f"{data.date} {data.clock_out}", "%Y-%m-%d %H:%M")
         total_hours = round((clock_out - clock_in).total_seconds() / 3600, 2)
+    schedule = await get_schedule_for_employee_date(employee, data.date)
+    scheduled_start_time = normalize_time_string((schedule or {}).get("start_time"))
+    scheduled_end_time = normalize_time_string((schedule or {}).get("end_time"))
+    lateness = calculate_lateness(data.date, scheduled_start_time, clock_in)
     
     attendance = {
         "id": att_id,
@@ -3505,26 +4135,69 @@ async def create_manual_attendance(data: AttendanceManualCreate, current_user: d
         "date": data.date,
         "clock_in": clock_in,
         "clock_out": clock_out,
+        "scheduled_start_time": scheduled_start_time,
+        "scheduled_end_time": scheduled_end_time,
+        "actual_clock_in": clock_in.isoformat(),
+        "actual_clock_out": clock_out.isoformat() if clock_out else None,
+        "late_status": lateness["late_status"],
+        "minutes_late": lateness["minutes_late"],
+        "missed_clock_in_alert_sent": False,
         "total_hours": total_hours,
-        "status": data.status,
+        "status": "late" if lateness["late_status"] else data.status,
         "notes": data.notes,
-        "created_at": datetime.utcnow()
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
     }
     await db.attendance.insert_one(attendance)
     await log_activity(current_user["id"], "manual_attendance", f"Manual attendance created for {employee['first_name']} {employee['last_name']}")
-    
-    return AttendanceResponse(
-        id=att_id,
-        employee_id=data.employee_id,
-        employee_name=f"{employee['first_name']} {employee['last_name']}",
-        date=data.date,
-        clock_in=clock_in,
-        clock_out=clock_out,
-        total_hours=total_hours,
-        status=data.status,
-        notes=data.notes,
-        created_at=attendance["created_at"]
-    )
+    return serialize_attendance_response(attendance, f"{employee['first_name']} {employee['last_name']}")
+
+
+@api_router.post("/clockin", response_model=AttendanceResponse)
+async def clock_in_alias(data: AttendanceClockIn, current_user: dict = Depends(get_current_user)):
+    return await clock_in(data, current_user)
+
+
+@api_router.post("/clockout", response_model=AttendanceResponse)
+async def clock_out_alias(data: AttendanceClockOut, current_user: dict = Depends(get_current_user)):
+    return await clock_out(data, current_user)
+
+
+@api_router.get("/attendance/late-report")
+async def get_late_report(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: dict = Depends(require_manager),
+):
+    query: Dict[str, Any] = {"late_status": True}
+    if start_date:
+        query["date"] = {"$gte": start_date}
+    if end_date:
+        query.setdefault("date", {})
+        query["date"]["$lte"] = end_date
+
+    if current_user["role"] == "manager":
+        manager_employee = await db.employees.find_one({"user_id": current_user["id"]}) or await db.employees.find_one({"email": current_user["email"]})
+        if not manager_employee:
+            return []
+        team_employees = await db.employees.find({"department_id": manager_employee.get("department_id"), "status": "active"}).to_list(500)
+        query["employee_id"] = {"$in": [employee["id"] for employee in team_employees]}
+
+    records = await db.attendance.find(query).sort("date", -1).to_list(500)
+    employees = {employee["id"]: employee for employee in await db.employees.find().to_list(1000)}
+    return [
+        {
+            "attendance_id": record["id"],
+            "employee_id": record["employee_id"],
+            "employee_name": f"{employees.get(record['employee_id'], {}).get('first_name', '')} {employees.get(record['employee_id'], {}).get('last_name', '')}".strip(),
+            "date": record["date"],
+            "scheduled_start_time": record.get("scheduled_start_time"),
+            "actual_clock_in": record.get("actual_clock_in"),
+            "minutes_late": int(record.get("minutes_late", 0) or 0),
+            "department_id": employees.get(record["employee_id"], {}).get("department_id"),
+        }
+        for record in records
+    ]
 
 # ===== Payroll Routes =====
 @api_router.post("/payroll", response_model=PayrollResponse)

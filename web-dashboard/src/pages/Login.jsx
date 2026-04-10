@@ -118,6 +118,12 @@ export default function Login() {
           </div>
 
           <div className="mt-6 text-center text-sm text-gray-600">
+            <Link to="/forgot-password" className="text-primary-600 font-semibold hover:text-primary-700">
+              Forgot password?
+            </Link>
+          </div>
+
+          <div className="mt-4 text-center text-sm text-gray-600">
             Need a new HR workspace?{' '}
             <Link to="/signup" className="text-primary-600 font-semibold hover:text-primary-700">
               Create an HR account
