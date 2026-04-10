@@ -18,8 +18,11 @@ from bson import ObjectId
 import io
 import csv
 import base64
+import json
 from math import radians, cos, sin, asin, sqrt
 import asyncio
+from urllib import request as urllib_request, error as urllib_error
+from zoneinfo import ZoneInfo
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.lib.units import inch
@@ -49,6 +52,7 @@ app = FastAPI(
     description="Smart Attendance & Workforce Management - Emplora",
     version="1.0.0"
 )
+app.state.notification_worker = None
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
@@ -59,6 +63,20 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+@app.on_event("startup")
+async def start_background_notification_worker():
+    if not app.state.notification_worker:
+        app.state.notification_worker = asyncio.create_task(background_notification_worker())
+
+
+@app.on_event("shutdown")
+async def stop_background_notification_worker():
+    task = getattr(app.state, "notification_worker", None)
+    if task:
+        task.cancel()
+        app.state.notification_worker = None
 
 # ===== Utility Functions =====
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -264,6 +282,297 @@ async def seed_notification(title: str, message: str, target_role: str = "all", 
     await db.notifications.insert_one(notification)
 
 
+def chunked(items: List[Any], size: int) -> List[List[Any]]:
+    return [items[index : index + size] for index in range(0, len(items), size)]
+
+
+async def save_notification(
+    title: str,
+    message: str,
+    notification_type: str = "info",
+    target_role: str = "all",
+    target_user_id: Optional[str] = None,
+    data: Optional[Dict[str, Any]] = None,
+):
+    notification = {
+        "id": str(uuid.uuid4()),
+        "type": notification_type,
+        "title": title,
+        "message": message,
+        "target_role": target_role,
+        "target_user_id": target_user_id,
+        "data": data or {},
+        "read": False,
+        "created_at": datetime.utcnow(),
+    }
+    await db.notifications.insert_one(notification)
+    return notification
+
+
+async def get_active_push_tokens_for_user(user_id: str) -> List[str]:
+    tokens = await db.push_tokens.find({"user_id": user_id, "active": True}).to_list(20)
+    return [token["push_token"] for token in tokens if token.get("push_token")]
+
+
+async def disable_invalid_push_tokens(tokens: List[str]):
+    if not tokens:
+        return
+
+    await db.push_tokens.update_many(
+        {"push_token": {"$in": tokens}},
+        {"$set": {"active": False, "updated_at": datetime.utcnow()}},
+    )
+
+
+async def send_expo_push(tokens: List[str], title: str, message: str, data: Optional[Dict[str, Any]] = None):
+    if not tokens:
+        return
+
+    payloads = [
+        {
+            "to": token,
+            "title": title,
+            "body": message,
+            "sound": "default",
+            "data": data or {},
+        }
+        for token in tokens
+        if token.startswith("ExponentPushToken[") or token.startswith("ExpoPushToken[")
+    ]
+
+    if not payloads:
+        return
+
+    invalid_tokens: List[str] = []
+
+    for batch in chunked(payloads, 100):
+        body = json.dumps(batch).encode("utf-8")
+        request = urllib_request.Request(
+            "https://exp.host/--/api/v2/push/send",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+
+        try:
+            response_text = await asyncio.to_thread(lambda: urllib_request.urlopen(request, timeout=15).read().decode("utf-8"))
+            response_json = json.loads(response_text)
+            for ticket, payload in zip(response_json.get("data", []), batch):
+                details = ticket.get("details") or {}
+                if ticket.get("status") == "error" and details.get("error") == "DeviceNotRegistered":
+                    invalid_tokens.append(payload["to"])
+        except urllib_error.HTTPError as exc:
+            logger.warning("Expo push request failed with HTTP %s", exc.code)
+        except Exception as exc:
+            logger.warning("Expo push request failed: %s", exc)
+
+    if invalid_tokens:
+        await disable_invalid_push_tokens(invalid_tokens)
+
+
+async def notify_user(
+    user_id: Optional[str],
+    title: str,
+    message: str,
+    notification_type: str = "info",
+    data: Optional[Dict[str, Any]] = None,
+):
+    if not user_id:
+        return
+
+    await save_notification(
+        title=title,
+        message=message,
+        notification_type=notification_type,
+        target_role="all",
+        target_user_id=user_id,
+        data=data,
+    )
+    tokens = await get_active_push_tokens_for_user(user_id)
+    await send_expo_push(tokens, title, message, data)
+
+
+async def notify_employee_by_employee_id(
+    employee_id: Optional[str],
+    title: str,
+    message: str,
+    notification_type: str = "info",
+    data: Optional[Dict[str, Any]] = None,
+):
+    if not employee_id:
+        return
+
+    employee = await db.employees.find_one({"id": employee_id})
+    if not employee:
+        return
+
+    user = None
+    if employee.get("user_id"):
+        user = await db.users.find_one({"id": employee["user_id"]})
+    if not user and employee.get("email"):
+        user = await db.users.find_one({"email": employee["email"]})
+
+    if not user:
+        return
+
+    await notify_user(user["id"], title, message, notification_type=notification_type, data=data)
+
+
+async def apply_leave_balance_transition(
+    employee_id: Optional[str],
+    leave_type_id: Optional[str],
+    days_count: Any,
+    previous_status: Optional[str],
+    new_status: Optional[str],
+):
+    if not employee_id or not leave_type_id or leave_type_id == "time_off":
+        return
+
+    try:
+        requested_days = float(days_count or 0)
+    except (TypeError, ValueError):
+        return
+
+    if requested_days <= 0:
+        return
+
+    delta = 0.0
+    if previous_status != "approved" and new_status == "approved":
+        delta = -requested_days
+    elif previous_status == "approved" and new_status != "approved":
+        delta = requested_days
+
+    if not delta:
+        return
+
+    employee = await db.employees.find_one({"id": employee_id})
+    if not employee:
+        return
+
+    current_balance = float((employee.get("leave_balance") or {}).get(leave_type_id, 0) or 0)
+    next_balance = max(0.0, current_balance + delta)
+
+    await db.employees.update_one(
+        {"id": employee_id},
+        {
+            "$set": {
+                f"leave_balance.{leave_type_id}": next_balance,
+                "updated_at": datetime.utcnow(),
+            }
+        },
+    )
+
+
+def parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def get_shift_local_now(shift: Dict[str, Any]) -> datetime:
+    timezone_name = shift.get("clock_in", {}).get("timezone") or "UTC"
+    try:
+        return datetime.now(ZoneInfo(timezone_name))
+    except Exception:
+        return datetime.utcnow()
+
+
+async def process_expired_breaks():
+    now = datetime.utcnow()
+    active_breaks = await db.shifts.find(
+        {"status": "on_break", "current_break": {"$ne": None}}
+    ).to_list(500)
+
+    for shift in active_breaks:
+        current_break = shift.get("current_break") or {}
+        break_start = parse_iso_datetime(current_break.get("start") or current_break.get("start_local"))
+        if not break_start:
+            continue
+
+        normalized_break_start = break_start.replace(tzinfo=None) if break_start.tzinfo else break_start
+        if (now - normalized_break_start) < timedelta(minutes=60):
+            continue
+
+        break_end = now
+        break_duration = int((break_end - normalized_break_start).total_seconds())
+        completed_break = {
+            "id": current_break.get("id", str(uuid.uuid4())),
+            "start": current_break.get("start"),
+            "start_local": current_break.get("start_local"),
+            "start_location": current_break.get("start_location"),
+            "end": break_end.isoformat(),
+            "end_local": break_end.isoformat(),
+            "duration_seconds": break_duration,
+            "auto_ended": True,
+        }
+        breaks = shift.get("breaks", [])
+        breaks.append(completed_break)
+
+        await db.shifts.update_one(
+            {"id": shift["id"], "status": "on_break"},
+            {
+                "$set": {
+                    "status": "working",
+                    "current_break": None,
+                    "breaks": breaks,
+                    "total_break_seconds": shift.get("total_break_seconds", 0) + break_duration,
+                    "updated_at": now,
+                    "auto_resumed_at": now,
+                }
+            },
+        )
+
+        await notify_employee_by_employee_id(
+            shift.get("employee_id"),
+            "Break ended",
+            "Your break time expired and you were automatically clocked back in.",
+            notification_type="break_auto_end",
+            data={"shift_id": shift["id"], "employee_id": shift.get("employee_id")},
+        )
+
+
+async def process_after_hours_clock_out_reminders():
+    active_shifts = await db.shifts.find({"status": {"$in": ["working", "on_break"]}}).to_list(500)
+
+    for shift in active_shifts:
+        if shift.get("after_hours_reminder_sent_at"):
+            continue
+
+        local_now = get_shift_local_now(shift)
+        if local_now.hour < 17 or (local_now.hour == 17 and local_now.minute < 5):
+            continue
+
+        await db.shifts.update_one(
+            {"id": shift["id"]},
+            {"$set": {"after_hours_reminder_sent_at": datetime.utcnow(), "updated_at": datetime.utcnow()}},
+        )
+
+        await notify_employee_by_employee_id(
+            shift.get("employee_id"),
+            "Still clocked in",
+            "You're still clocked in after normal work hours. Please clock out if your shift is finished.",
+            notification_type="clock_out_reminder",
+            data={"shift_id": shift["id"], "employee_id": shift.get("employee_id")},
+        )
+
+
+async def background_notification_worker():
+    while True:
+        try:
+            await process_expired_breaks()
+            await process_after_hours_clock_out_reminders()
+        except Exception as exc:
+            logger.warning("Background notification worker error: %s", exc)
+        await asyncio.sleep(60)
+
+
 async def clear_demo_data():
     demo_emails = [
         "employee@test.com",
@@ -354,6 +663,10 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
+
+class PushTokenRegister(BaseModel):
+    push_token: str
+    platform: Optional[str] = None
 
 # Department Models
 class DepartmentCreate(BaseModel):
@@ -1075,6 +1388,37 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         created_at=current_user["created_at"]
     )
 
+
+@api_router.post("/notifications/push-token")
+async def register_push_token(payload: PushTokenRegister, current_user: dict = Depends(get_current_user)):
+    now = datetime.utcnow()
+    await db.push_tokens.update_one(
+        {"push_token": payload.push_token},
+        {
+            "$set": {
+                "user_id": current_user["id"],
+                "platform": payload.platform,
+                "active": True,
+                "updated_at": now,
+            },
+            "$setOnInsert": {
+                "id": str(uuid.uuid4()),
+                "created_at": now,
+            },
+        },
+        upsert=True,
+    )
+    return {"message": "Push token registered"}
+
+
+@api_router.delete("/notifications/push-token")
+async def unregister_push_token(payload: PushTokenRegister, current_user: dict = Depends(get_current_user)):
+    await db.push_tokens.update_one(
+        {"push_token": payload.push_token, "user_id": current_user["id"]},
+        {"$set": {"active": False, "updated_at": datetime.utcnow()}},
+    )
+    return {"message": "Push token unregistered"}
+
 @api_router.put("/auth/complete-onboarding")
 async def complete_onboarding(current_user: dict = Depends(get_current_user)):
     await db.users.update_one(
@@ -1593,6 +1937,7 @@ async def upsert_paystub(payload: PaystubCreate, current_user: dict) -> dict:
             "pay_period_start": payload.pay_period_start,
             "pay_period_end": payload.pay_period_end,
         })
+    was_published = bool(existing_paystub and existing_paystub.get("published"))
 
     update_doc = {
         "employee_id": payload.employee_id,
@@ -1627,6 +1972,21 @@ async def upsert_paystub(payload: PaystubCreate, current_user: dict) -> dict:
         await db.payroll.update_one(
             {"id": payload.payroll_id},
             {"$set": {"status": "sent"}}
+        )
+
+    if payload.published and not was_published:
+        await notify_employee_by_employee_id(
+            payload.employee_id,
+            "New paystub received",
+            f"Your paystub for {payload.pay_period_start} to {payload.pay_period_end} is now available in the Pay tab.",
+            notification_type="paystub_received",
+            data={
+                "employee_id": payload.employee_id,
+                "payroll_id": payload.payroll_id,
+                "pay_period_start": payload.pay_period_start,
+                "pay_period_end": payload.pay_period_end,
+                "pay_date": pay_date,
+            },
         )
 
     await log_activity(
@@ -1816,6 +2176,7 @@ async def admin_review_time_off(
         raise HTTPException(status_code=404, detail="Request not found")
     
     new_status = "approved" if action == "approve" else "denied"
+    previous_status = request.get("status", "pending")
     
     await db.time_off_requests.update_one(
         {"id": request_id},
@@ -1826,6 +2187,32 @@ async def admin_review_time_off(
             "review_note": note,
             "updated_at": datetime.utcnow()
         }}
+    )
+    await db.leave_requests.update_many(
+        {"source_time_off_request_id": request_id},
+        {
+            "$set": {
+                "status": new_status,
+                "manager_comment": note,
+                "approved_by": current_user["id"],
+                "approved_at": datetime.utcnow(),
+            }
+        },
+    )
+    await apply_leave_balance_transition(
+        employee_id=request.get("employee_id"),
+        leave_type_id=request.get("leave_type_id"),
+        days_count=request.get("days_count"),
+        previous_status=previous_status,
+        new_status=new_status,
+    )
+
+    await notify_employee_by_employee_id(
+        request["employee_id"],
+        f"Leave request {new_status}",
+        f"Your {request.get('leave_type_name', 'leave')} request from {request['start_date']} to {request['end_date']} was {new_status}.",
+        notification_type="leave_reviewed",
+        data={"request_id": request_id, "status": new_status},
     )
     
     await log_activity(current_user["id"], f"time_off_{action}d", f"Time-off request {action}d")
@@ -2794,19 +3181,27 @@ async def update_leave_request(lr_id: str, update: LeaveRequestUpdate, current_u
                 }}
             )
     
-    leave_type_id = lr.get("leave_type_id")
-    should_track_balance = bool(leave_type_id and leave_type_id != "time_off")
+    await apply_leave_balance_transition(
+        employee_id=lr.get("employee_id"),
+        leave_type_id=lr.get("leave_type_id"),
+        days_count=lr.get("days_count"),
+        previous_status=previous_status,
+        new_status=update.status,
+    )
 
-    if previous_status != "approved" and update.status == "approved" and should_track_balance:
-        await db.employees.update_one(
-            {"id": lr["employee_id"]},
-            {"$inc": {f"leave_balance.{lr['leave_type_id']}": -lr["days_count"]}}
-        )
-    elif previous_status == "approved" and update.status != "approved" and should_track_balance:
-        await db.employees.update_one(
-            {"id": lr["employee_id"]},
-            {"$inc": {f"leave_balance.{lr['leave_type_id']}": lr["days_count"]}}
-        )
+    leave_type_name = None
+    if lr.get("leave_type_id"):
+        leave_type = await db.leave_types.find_one({"id": lr["leave_type_id"]})
+        if leave_type:
+            leave_type_name = leave_type.get("name")
+
+    await notify_employee_by_employee_id(
+        lr["employee_id"],
+        f"Leave request {update.status}",
+        f"Your {(leave_type_name or lr.get('leave_type_name') or 'leave')} request from {lr.get('start_date')} to {lr.get('end_date')} was {update.status}.",
+        notification_type="leave_reviewed",
+        data={"request_id": lr_id, "status": update.status},
+    )
     
     await log_activity(current_user["id"], f"leave_{update.status}", f"Leave request {update.status}")
     
@@ -4856,6 +5251,13 @@ async def auto_clock_out_midnight(background_tasks: BackgroundTasks, current_use
                 "employee_name": f"{employee.get('first_name', '')} {employee.get('last_name', '')}",
                 "clock_in": record["clock_in"]
             })
+            await notify_employee_by_employee_id(
+                record["employee_id"],
+                "Clocked out automatically",
+                "You were still clocked in after hours, so the system clocked you out automatically. HR can review it if needed.",
+                notification_type="auto_clock_out",
+                data={"attendance_id": record["id"], "employee_id": record["employee_id"]},
+            )
     
     # Create notification for HR if there were auto clock-outs
     if auto_clocked:
