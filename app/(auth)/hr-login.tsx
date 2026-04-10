@@ -22,9 +22,10 @@ export default function HRLoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
-  const { login, user } = useAuth();
+  const { login } = useAuth();
   const router = useRouter();
 
   const handleHRLogin = async () => {
@@ -35,18 +36,20 @@ export default function HRLoginScreen() {
 
     setIsLoading(true);
     try {
-      await login(email.trim(), password, false);
+      const signedInUser = await login(email.trim(), password, rememberMe);
 
-      // 🔥 IMPORTANT: check role AFTER login
-      const role = user?.role;
-
-      if (role === 'hr_admin' || role === 'super_admin' || role === 'manager') {
+      if (signedInUser.role === 'manager') {
+        router.replace('/manager/dashboard');
+      } else if (
+        signedInUser.role === 'hr_admin' ||
+        signedInUser.role === 'super_admin' ||
+        signedInUser.role === 'hr'
+      ) {
         router.replace('/hr/dashboard');
       } else {
         Alert.alert('Access Denied', 'This account is not authorized for HR access.');
         router.replace('/(tabs)');
       }
-
     } catch (error: any) {
       Alert.alert('Login Failed', error.message || 'Invalid credentials');
     } finally {
@@ -70,7 +73,6 @@ export default function HRLoginScreen() {
           </View>
 
           <View style={styles.form}>
-            {/* Email */}
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Email</Text>
               <View style={styles.inputContainer}>
@@ -86,7 +88,6 @@ export default function HRLoginScreen() {
               </View>
             </View>
 
-            {/* Password */}
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Password</Text>
               <View style={styles.inputContainer}>
@@ -109,7 +110,19 @@ export default function HRLoginScreen() {
               </View>
             </View>
 
-            {/* Login Button */}
+            <View style={styles.rememberMeContainer}>
+              <TouchableOpacity
+                style={styles.rememberMeRow}
+                onPress={() => setRememberMe(!rememberMe)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.checkbox, rememberMe && styles.checkboxChecked]}>
+                  {rememberMe && <Ionicons name="checkmark" size={14} color="#FFFFFF" />}
+                </View>
+                <Text style={styles.rememberMeText}>Remember me</Text>
+              </TouchableOpacity>
+            </View>
+
             <TouchableOpacity
               style={[styles.loginButton, isLoading && styles.disabled]}
               onPress={handleHRLogin}
@@ -122,12 +135,11 @@ export default function HRLoginScreen() {
               )}
             </TouchableOpacity>
 
-            {/* Back to Employee Login */}
             <TouchableOpacity
               style={styles.backButton}
               onPress={() => router.replace('/(auth)/login')}
             >
-              <Text style={styles.backText}>← Back to Employee Login</Text>
+              <Text style={styles.backText}>{'< Back to Employee Login'}</Text>
             </TouchableOpacity>
           </View>
         </ScrollView>
@@ -186,7 +198,32 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#1E293B',
   },
-
+  rememberMeContainer: {
+    marginBottom: 8,
+  },
+  rememberMeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#CBD5E1',
+    marginRight: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  checkboxChecked: {
+    backgroundColor: '#1E40AF',
+    borderColor: '#1E40AF',
+  },
+  rememberMeText: {
+    fontSize: 14,
+    color: '#475569',
+  },
   loginButton: {
     backgroundColor: '#1E40AF',
     paddingVertical: 16,

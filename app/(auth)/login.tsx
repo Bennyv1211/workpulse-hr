@@ -11,6 +11,7 @@ import {
   Alert,
   ActivityIndicator,
   Image,
+  Modal,
 } from 'react-native';
 import { useRouter, Link } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -24,6 +25,8 @@ export default function LoginScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [showTerms, setShowTerms] = useState(false);
+  const [showTermsPreview, setShowTermsPreview] = useState(false);
   const { login } = useAuth();
   const router = useRouter();
 
@@ -35,7 +38,22 @@ export default function LoginScreen() {
 
     setIsLoading(true);
     try {
-      await login(email.trim(), password, rememberMe);
+      const signedInUser = await login(email.trim(), password, rememberMe);
+
+      if (signedInUser.role === 'manager') {
+        router.replace('/manager/dashboard');
+        return;
+      }
+
+      if (
+        signedInUser.role === 'hr_admin' ||
+        signedInUser.role === 'super_admin' ||
+        signedInUser.role === 'hr'
+      ) {
+        router.replace('/hr/dashboard');
+        return;
+      }
+
       router.replace('/(tabs)');
     } catch (error: any) {
       Alert.alert('Login Failed', error.message || 'Invalid credentials');
@@ -141,23 +159,100 @@ export default function LoginScreen() {
             </TouchableOpacity>
 
             <View style={styles.registerContainer}>
-              <Text style={styles.registerText}>Don't have an account? </Text>
+              <Text style={styles.registerText}>Don&apos;t have an account? </Text>
               <Link href="/(auth)/register" asChild>
                 <TouchableOpacity>
                   <Text style={styles.registerLink}>Sign Up</Text>
                 </TouchableOpacity>
               </Link>
             </View>
+
+            <View style={styles.termsCard}>
+              <TouchableOpacity
+                onPress={() => setShowTermsPreview(!showTermsPreview)}
+                style={styles.termsToggle}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.termsToggleText}>Terms & Privacy</Text>
+                <Ionicons
+                  name={showTermsPreview ? 'chevron-up' : 'chevron-down'}
+                  size={18}
+                  color="#475569"
+                />
+              </TouchableOpacity>
+
+              {showTermsPreview && (
+                <View style={styles.termsPreviewBody}>
+                  <Text style={styles.termsPreviewText}>
+                    We collect account, employee, attendance, leave, payroll, paystub, session, and optional GPS
+                    attendance data only to run Emplora securely and make the app function.
+                  </Text>
+                  <TouchableOpacity onPress={() => setShowTerms(true)} style={styles.termsReadMoreButton}>
+                    <Text style={styles.termsReadMoreText}>Read full Terms & Privacy</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
           </View>
 
           <View style={styles.demoInfo}>
             <Text style={styles.demoTitle}>Test Accounts</Text>
-            <Text style={styles.demoText}>employee@test.com | hr@test.com</Text>
-            <Text style={styles.demoText}>manager@test.com | superadmin@test.com</Text>
+            <Text style={styles.demoText}>(HR) hr@company.com</Text>
+            <Text style={styles.demoText}>(Manager) manager@company.com</Text>
+            <Text style={styles.demoText}>(Employee) employee@company.com</Text>
             <Text style={styles.demoPassword}>Password: Test123!</Text>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <Modal visible={showTerms} animationType="slide" onRequestClose={() => setShowTerms(false)}>
+        <SafeAreaView style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Terms & Privacy</Text>
+            <TouchableOpacity onPress={() => setShowTerms(false)}>
+              <Ionicons name="close" size={24} color="#0F172A" />
+            </TouchableOpacity>
+          </View>
+          <ScrollView contentContainerStyle={styles.modalContent}>
+            <Text style={styles.modalSectionTitle}>What Emplora collects</Text>
+            <Text style={styles.modalBody}>
+              We collect the information needed to run the workforce platform, including account details,
+              employee profile information, attendance and shift records, leave requests, payroll and paystub
+              records, device login/session information, and location data when a user clocks in, clocks out,
+              or uses location-aware attendance features.
+            </Text>
+
+            <Text style={styles.modalSectionTitle}>Why we collect it</Text>
+            <Text style={styles.modalBody}>
+              This data is used only to provide the service: sign users in securely, manage employees and
+              roles, process attendance and time tracking, review leave, generate payroll and paystubs,
+              support manager and HR dashboards, create reports and backups, and keep records accurate across
+              the mobile app and web dashboard.
+            </Text>
+
+            <Text style={styles.modalSectionTitle}>How your data is handled</Text>
+            <Text style={styles.modalBody}>
+              Emplora does not sell your data. We do not send your workforce data to third-party apps for
+              advertising or resale. Data is used solely for app functionality, security, storage,
+              infrastructure, and service delivery that supports the platform.
+            </Text>
+
+            <Text style={styles.modalSectionTitle}>Location and device data</Text>
+            <Text style={styles.modalBody}>
+              When enabled, GPS data may be collected during attendance actions so managers and HR can verify
+              where a user clocked in or out. Device and session data may also be used to keep accounts secure
+              and maintain reliable sign-in.
+            </Text>
+
+            <Text style={styles.modalSectionTitle}>Your acknowledgement</Text>
+            <Text style={styles.modalBody}>
+              By using Emplora, you acknowledge that this data is collected and processed for workforce
+              management functionality only. If your organization has internal policies about employee data,
+              those policies should also be followed by administrators using this platform.
+            </Text>
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -301,6 +396,53 @@ const styles = StyleSheet.create({
     color: '#3B82F6',
     fontWeight: '600',
   },
+  termsButton: {
+    marginTop: 18,
+    alignItems: 'center',
+  },
+  termsText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#475569',
+    textAlign: 'center',
+  },
+  termsCard: {
+    marginTop: 18,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F8FAFC',
+    overflow: 'hidden',
+  },
+  termsToggle: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  termsToggleText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  termsPreviewBody: {
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+  },
+  termsPreviewText: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: '#475569',
+  },
+  termsReadMoreButton: {
+    marginTop: 10,
+  },
+  termsReadMoreText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#2563EB',
+  },
   demoInfo: {
     backgroundColor: '#EFF6FF',
     borderRadius: 12,
@@ -323,5 +465,38 @@ const styles = StyleSheet.create({
     color: '#3B82F6',
     marginTop: 6,
     fontWeight: '500',
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+    backgroundColor: '#FFFFFF',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  modalContent: {
+    padding: 20,
+    gap: 14,
+  },
+  modalSectionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  modalBody: {
+    fontSize: 14,
+    lineHeight: 22,
+    color: '#475569',
   },
 });

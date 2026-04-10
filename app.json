@@ -54,6 +54,14 @@
         {
           "locationAlwaysAndWhenInUsePermission": "Emplora needs your location to verify attendance at approved work locations."
         }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#3B82F6",
+          "defaultChannel": "default"
+        }
       ]
     ],
     "experiments": {

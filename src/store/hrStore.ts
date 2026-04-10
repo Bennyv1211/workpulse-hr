@@ -11,6 +11,7 @@ interface Employee {
   first_name: string;
   last_name: string;
   email: string;
+  role?: string;
   phone?: string;
   job_title: string;
   department_id: string;

@@ -8,7 +8,6 @@ import {
   RefreshControl,
   ActivityIndicator,
   Alert,
-  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,6 +15,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Sharing from 'expo-sharing';
 import * as FileSystemLegacy from 'expo-file-system/legacy';
+import AppIcon from '../../src/components/AppIcon';
 
 const RAW_API_URL =
   process.env.EXPO_PUBLIC_BACKEND_URL ||
@@ -142,29 +142,43 @@ export default function PaystubsScreen() {
     try {
       const token = await getToken();
 
-      if (paystub.pdf_url) {
-        const supported = await Linking.canOpenURL(paystub.pdf_url);
-        if (supported) {
-          await Linking.openURL(paystub.pdf_url);
-          return;
-        }
-      }
-
       if (paystub.pdf_base64) {
         await saveAndShareBase64Pdf(paystub);
         return;
       }
 
-      const downloadUrl = `${API_URL}/api/paystubs/${paystub.id}/download${
-        token ? `?token=${encodeURIComponent(token)}` : ''
-      }`;
-
-      const supported = await Linking.canOpenURL(downloadUrl);
-      if (supported) {
-        await Linking.openURL(downloadUrl);
-      } else {
-        Alert.alert('Error', 'Cannot open paystub download link');
+      const cacheDirectory = FileSystemLegacy.cacheDirectory;
+      if (!cacheDirectory) {
+        throw new Error('Temporary file storage is not available on this device.');
       }
+
+      const safeName = (paystub.pdf_filename || `paystub-${paystub.id}.pdf`).replace(
+        /[^a-zA-Z0-9._-]/g,
+        '_'
+      );
+      const fileUri = `${cacheDirectory}${safeName}`;
+
+      await FileSystemLegacy.downloadAsync(
+        `${API_URL}/api/paystubs/${paystub.id}/download`,
+        fileUri,
+        {
+          headers: {
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        }
+      );
+
+      const canShare = await Sharing.isAvailableAsync();
+      if (!canShare) {
+        Alert.alert('Saved', `Paystub downloaded to:\n${fileUri}`);
+        return;
+      }
+
+      await Sharing.shareAsync(fileUri, {
+        mimeType: 'application/pdf',
+        dialogTitle: 'Download Paystub PDF',
+        UTI: '.pdf',
+      });
     } catch (error: any) {
       Alert.alert('Error', error.message || 'Failed to download paystub');
     }
@@ -204,7 +218,7 @@ export default function PaystubsScreen() {
   const renderPaystub = ({ item }: { item: Paystub }) => (
     <TouchableOpacity style={styles.paystubCard} onPress={() => handleDownload(item)}>
       <View style={styles.paystubIcon}>
-        <Ionicons name="document-text" size={28} color="#3B82F6" />
+        <AppIcon name="paystubs" size={26} color="#3B82F6" />
       </View>
 
       <View style={styles.paystubContent}>

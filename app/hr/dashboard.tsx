@@ -9,16 +9,19 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useAuth } from '../../src/context/AuthContext';
-import { API_URL } from '../../src/context/AuthContext';
+import * as FileSystemLegacy from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
+import * as XLSX from 'xlsx';
+import { API_URL, useAuth } from '../../src/context/AuthContext';
+import AppIcon from '../../src/components/AppIcon';
+import { Ionicons } from '@expo/vector-icons';
 
 type DashboardCardProps = {
   title: string;
   subtitle: string;
-  icon: keyof typeof Ionicons.glyphMap;
+  icon: 'employees' | 'add-employee' | 'payroll' | 'paystubs' | 'leave-requests';
   color: string;
   onPress: () => void;
 };
@@ -27,13 +30,18 @@ export default function HRDashboardScreen() {
   const router = useRouter();
   const { user, logout } = useAuth();
   const [seeding, setSeeding] = useState(false);
+  const [backingUp, setBackingUp] = useState(false);
 
   useEffect(() => {
+    if (user?.role === 'manager') {
+      router.replace('/manager/dashboard');
+      return;
+    }
+
     if (
       user &&
       user.role !== 'super_admin' &&
       user.role !== 'hr_admin' &&
-      user.role !== 'manager' &&
       user.role !== 'hr'
     ) {
       router.replace('/(tabs)/dashboard');
@@ -114,10 +122,100 @@ export default function HRDashboardScreen() {
     ]);
   };
 
+  const flattenExportRow = (row: any) => {
+    const flat: Record<string, string | number | boolean> = {};
+
+    Object.entries(row || {}).forEach(([key, value]) => {
+      if (value === null || value === undefined) {
+        flat[key] = '';
+      } else if (Array.isArray(value) || typeof value === 'object') {
+        flat[key] = JSON.stringify(value);
+      } else {
+        flat[key] = value as string | number | boolean;
+      }
+    });
+
+    return flat;
+  };
+
+  const handleBackupExport = async () => {
+    try {
+      setBackingUp(true);
+      const token = await getToken();
+      const response = await fetch(`${API_URL}/api/admin/backup`, {
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+
+      const raw = await response.text();
+      const data = raw ? JSON.parse(raw) : null;
+
+      if (!response.ok) {
+        throw new Error(data?.detail || data?.message || 'Failed to export backup');
+      }
+
+      const workbook = XLSX.utils.book_new();
+      const collections = data?.collections || {};
+
+      Object.entries(collections).forEach(([sheetName, records]) => {
+        const rows = Array.isArray(records)
+          ? (records as any[]).map(flattenExportRow)
+          : [];
+
+        const worksheet = XLSX.utils.json_to_sheet(
+          rows.length ? rows : [{ message: `No data found for ${sheetName}` }]
+        );
+
+        XLSX.utils.book_append_sheet(
+          workbook,
+          worksheet,
+          String(sheetName).slice(0, 31)
+        );
+      });
+
+      const wbout = XLSX.write(workbook, {
+        type: 'base64',
+        bookType: 'xlsx',
+      });
+
+      const cacheDirectory = FileSystemLegacy.cacheDirectory;
+      if (!cacheDirectory) {
+        throw new Error('Temporary file storage is not available on this device.');
+      }
+
+      const fileName = `workpulse-backup-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      const fileUri = `${cacheDirectory}${fileName}`;
+
+      await FileSystemLegacy.writeAsStringAsync(fileUri, wbout, {
+        encoding: FileSystemLegacy.EncodingType.Base64,
+      });
+
+      const canShare = await Sharing.isAvailableAsync();
+      if (!canShare) {
+        Alert.alert('Backup Saved', `Backup file saved to:\n${fileUri}`);
+        return;
+      }
+
+      await Sharing.shareAsync(fileUri, {
+        mimeType:
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        dialogTitle: 'Save HR Backup Workbook',
+        UTI: 'org.openxmlformats.spreadsheetml.sheet',
+      });
+    } catch (error: any) {
+      Alert.alert('Backup Failed', error.message || 'Could not create backup export');
+    } finally {
+      setBackingUp(false);
+    }
+  };
+
   const DashboardCard = ({ title, subtitle, icon, color, onPress }: DashboardCardProps) => (
     <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.85}>
       <View style={[styles.cardIcon, { backgroundColor: `${color}15` }]}>
-        <Ionicons name={icon} size={26} color={color} />
+        <AppIcon name={icon} size={26} color={color} />
       </View>
 
       <View style={styles.cardTextWrap}>
@@ -125,7 +223,7 @@ export default function HRDashboardScreen() {
         <Text style={styles.cardSubtitle}>{subtitle}</Text>
       </View>
 
-      <Ionicons name="chevron-forward" size={20} color="#CBD5E1" />
+      <Text style={styles.chevron}>{'>'}</Text>
     </TouchableOpacity>
   );
 
@@ -180,7 +278,7 @@ export default function HRDashboardScreen() {
                 <ActivityIndicator size="small" color="#FFFFFF" />
               ) : (
                 <>
-                  <Ionicons name="flask-outline" size={18} color="#FFFFFF" />
+                  <AppIcon name="seed" size={18} color="#FFFFFF" />
                   <Text style={styles.seedButtonText}>Seed Demo Data</Text>
                 </>
               )}
@@ -188,13 +286,38 @@ export default function HRDashboardScreen() {
           </View>
         )}
 
+        <View style={styles.backupCard}>
+          <View style={styles.backupTextWrap}>
+            <Text style={styles.backupTitle}>Backup app data</Text>
+            <Text style={styles.backupSubtitle}>
+              Export employees, attendance, leave, payroll, paystubs, notifications, and logs into one Excel workbook.
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.backupButton, backingUp && styles.seedButtonDisabled]}
+            onPress={handleBackupExport}
+            disabled={backingUp}
+            activeOpacity={0.85}
+          >
+            {backingUp ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <>
+                <Ionicons name="download-outline" size={18} color="#FFFFFF" />
+                <Text style={styles.seedButtonText}>Export Backup</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Management</Text>
 
           <DashboardCard
             title="Employees"
             subtitle="View and manage all employees"
-            icon="people-outline"
+            icon="employees"
             color="#3B82F6"
             onPress={() => router.push('/hr/employees')}
           />
@@ -202,7 +325,7 @@ export default function HRDashboardScreen() {
           <DashboardCard
             title="Add Employee"
             subtitle="Create a new employee record"
-            icon="person-add-outline"
+            icon="add-employee"
             color="#10B981"
             onPress={() => router.push('/hr/employee-new')}
           />
@@ -210,7 +333,7 @@ export default function HRDashboardScreen() {
           <DashboardCard
             title="Payroll"
             subtitle="Calculate and manage payroll"
-            icon="cash-outline"
+            icon="payroll"
             color="#8B5CF6"
             onPress={() => router.push('/hr/payroll')}
           />
@@ -218,7 +341,7 @@ export default function HRDashboardScreen() {
           <DashboardCard
             title="Paystubs"
             subtitle="Review and publish employee paystubs"
-            icon="document-text-outline"
+            icon="paystubs"
             color="#F59E0B"
             onPress={() => router.push('/hr/paystubs')}
           />
@@ -226,14 +349,14 @@ export default function HRDashboardScreen() {
           <DashboardCard
             title="Leave Requests"
             subtitle="Review employee leave requests"
-            icon="calendar-outline"
+            icon="leave-requests"
             color="#EF4444"
             onPress={() => router.push('/hr/leave-requests')}
           />
         </View>
 
         <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-          <Ionicons name="log-out-outline" size={20} color="#EF4444" />
+          <AppIcon name="logout" size={20} color="#EF4444" />
           <Text style={styles.logoutText}>Logout</Text>
         </TouchableOpacity>
       </ScrollView>
@@ -314,6 +437,37 @@ const styles = StyleSheet.create({
     marginBottom: 24,
     gap: 14,
   },
+  backupCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 18,
+    marginBottom: 24,
+    gap: 14,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+  },
+  backupTextWrap: {
+    gap: 6,
+  },
+  backupTitle: {
+    color: '#1E293B',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  backupSubtitle: {
+    color: '#64748B',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  backupButton: {
+    minHeight: 48,
+    borderRadius: 14,
+    backgroundColor: '#1D4ED8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
   seedTextWrap: {
     gap: 6,
   },
@@ -388,6 +542,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#64748B',
     marginTop: 4,
+  },
+  chevron: {
+    fontSize: 22,
+    lineHeight: 22,
+    color: '#CBD5E1',
+    marginLeft: 12,
   },
   logoutButton: {
     marginTop: 18,

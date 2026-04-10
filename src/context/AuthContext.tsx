@@ -7,6 +7,7 @@ import React, {
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import { registerForPushNotificationsAsync } from '../lib/notifications';
 
 const RAW_API_URL =
   Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL ||
@@ -67,6 +68,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     loadStoredAuth();
   }, []);
+
+  useEffect(() => {
+    if (!token || !user) {
+      return;
+    }
+
+    syncPushToken(token).catch((error) => {
+      console.log('Push token sync failed:', error);
+    });
+  }, [token, user]);
+
+  const syncPushToken = async (authToken: string) => {
+    const expoPushToken = await registerForPushNotificationsAsync();
+    if (!expoPushToken) {
+      return;
+    }
+
+    const existingToken = await AsyncStorage.getItem('expo_push_token');
+    if (existingToken === expoPushToken) {
+      return;
+    }
+
+    const response = await fetch(`${API_URL}/api/notifications/push-token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({
+        push_token: expoPushToken,
+        platform: Constants.platform?.ios ? 'ios' : 'android',
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to register push token');
+    }
+
+    await AsyncStorage.setItem('expo_push_token', expoPushToken);
+  };
 
   const loadStoredAuth = async () => {
     try {
@@ -180,9 +221,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
+    const currentToken = token;
+    const expoPushToken = await AsyncStorage.getItem('expo_push_token');
+
+    if (currentToken && expoPushToken) {
+      try {
+        await fetch(`${API_URL}/api/notifications/push-token`, {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${currentToken}`,
+          },
+          body: JSON.stringify({
+            push_token: expoPushToken,
+            platform: Constants.platform?.ios ? 'ios' : 'android',
+          }),
+        });
+      } catch (error) {
+        console.log('Push token unregister failed:', error);
+      }
+    }
+
     await AsyncStorage.removeItem('auth_token');
     await AsyncStorage.removeItem('auth_user');
     await AsyncStorage.removeItem('remember_me');
+    await AsyncStorage.removeItem('expo_push_token');
 
     setToken(null);
     setUser(null);

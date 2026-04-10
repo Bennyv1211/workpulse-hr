@@ -18,7 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystemLegacy from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as XLSX from 'xlsx';
 
@@ -40,9 +40,15 @@ interface Employee {
   hourly_rate?: number | null;
   salary?: number | null;
   employment_type?: string;
+  leave_balance?: Record<string, number> | null;
   leave_balance_hours?: number | null;
   vacation_balance_hours?: number | null;
   sick_balance_hours?: number | null;
+}
+
+interface LeaveTypeOption {
+  id: string;
+  name: string;
 }
 
 interface AttendanceRecord {
@@ -90,6 +96,7 @@ export default function HRPayrollScreen() {
 
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
+  const [leaveTypes, setLeaveTypes] = useState<LeaveTypeOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -154,19 +161,53 @@ export default function HRPayrollScreen() {
   const isValidDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
   const formatMoney = (value: number) => `$${value.toFixed(2)}`;
 
+  const getBalanceHoursForType = useCallback(
+    (employee: Employee, typeName: string) => {
+      const directField =
+        typeName === 'Annual Leave'
+          ? employee.vacation_balance_hours
+          : typeName === 'Sick Leave'
+            ? employee.sick_balance_hours
+            : null;
+
+      if (typeof directField === 'number' && !Number.isNaN(directField)) {
+        return directField;
+      }
+
+      const leaveType = leaveTypes.find((item) => item.name === typeName);
+      const rawDays =
+        leaveType && employee.leave_balance
+          ? Number(employee.leave_balance[leaveType.id] ?? 0)
+          : 0;
+
+      if (!Number.isNaN(rawDays) && rawDays > 0) {
+        return rawDays * 8;
+      }
+
+      if (typeName === 'Annual Leave' && typeof employee.leave_balance_hours === 'number') {
+        return employee.leave_balance_hours;
+      }
+
+      return 0;
+    },
+    [leaveTypes]
+  );
+
   const loadData = async () => {
     try {
       if (!isValidDate(periodStart) || !isValidDate(periodEnd)) {
         throw new Error('Please use YYYY-MM-DD for the pay period dates.');
       }
 
-      const [employeeData, attendanceData] = await Promise.all([
+      const [employeeData, attendanceData, leaveTypeData] = await Promise.all([
         apiRequest('/api/employees'),
         apiRequest(`/api/attendance?start_date=${periodStart}&end_date=${periodEnd}`),
+        apiRequest('/api/leave-types'),
       ]);
 
       setEmployees(Array.isArray(employeeData) ? employeeData : []);
       setAttendance(Array.isArray(attendanceData) ? attendanceData : []);
+      setLeaveTypes(Array.isArray(leaveTypeData) ? leaveTypeData : []);
     } catch (error: any) {
       console.log('Payroll page load error:', error);
       Alert.alert('Error', error.message || 'Failed to load payroll data');
@@ -247,13 +288,11 @@ export default function HRPayrollScreen() {
         benefitsDeduction: Number(benefitsDeduction.toFixed(2)),
         grossPay: Number(grossPay.toFixed(2)),
         netPay: Number(netPay.toFixed(2)),
-        vacationBalanceHours: Number(
-          emp.vacation_balance_hours ?? emp.leave_balance_hours ?? 0
-        ),
-        sickBalanceHours: Number(emp.sick_balance_hours ?? 0),
+        vacationBalanceHours: Number(getBalanceHoursForType(emp, 'Annual Leave')),
+        sickBalanceHours: Number(getBalanceHoursForType(emp, 'Sick Leave')),
       } as PayrollPreview;
     });
-  }, [employees, attendanceByEmployee, drafts]);
+  }, [employees, attendanceByEmployee, drafts, getBalanceHoursForType]);
 
   const openPayrollEditor = (employee: Employee) => {
     if (!drafts[employee.id]) {
@@ -414,10 +453,15 @@ export default function HRPayrollScreen() {
       });
 
       const fileName = `payroll-export-${periodStart}-to-${periodEnd}.xlsx`;
-      const fileUri = `${FileSystem.cacheDirectory}${fileName}`;
+      const cacheDirectory = FileSystemLegacy.cacheDirectory;
+      if (!cacheDirectory) {
+        throw new Error('Temporary file storage is not available on this device.');
+      }
 
-      await FileSystem.writeAsStringAsync(fileUri, wbout, {
-        encoding: FileSystem.EncodingType.Base64,
+      const fileUri = `${cacheDirectory}${fileName}`;
+
+      await FileSystemLegacy.writeAsStringAsync(fileUri, wbout, {
+        encoding: FileSystemLegacy.EncodingType.Base64,
       });
 
       const canShare = await Sharing.isAvailableAsync();

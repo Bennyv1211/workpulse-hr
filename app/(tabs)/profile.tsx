@@ -8,9 +8,9 @@ import {
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../src/context/AuthContext';
+import AppIcon from '../../src/components/AppIcon';
 
 export default function ProfileScreen() {
   const { user, logout } = useAuth();
@@ -37,17 +37,16 @@ export default function ProfileScreen() {
   const MenuItem = ({ icon, label, onPress, showArrow = true, color = '#3B82F6', danger = false }: any) => (
     <TouchableOpacity style={styles.menuItem} onPress={onPress}>
       <View style={[styles.menuIcon, { backgroundColor: danger ? '#FEE2E2' : color + '15' }]}>
-        <Ionicons name={icon} size={22} color={danger ? '#EF4444' : color} />
+        <AppIcon name={icon} size={22} color={danger ? '#EF4444' : color} />
       </View>
       <Text style={[styles.menuLabel, danger && { color: '#EF4444' }]}>{label}</Text>
-      {showArrow && <Ionicons name="chevron-forward" size={20} color="#CBD5E1" />}
+      {showArrow && <Text style={styles.chevron}>{'>'}</Text>}
     </TouchableOpacity>
   );
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        {/* Profile Header */}
         <View style={styles.profileHeader}>
           <View style={styles.avatar}>
             <Text style={styles.avatarText}>
@@ -58,17 +57,16 @@ export default function ProfileScreen() {
           <Text style={styles.profileEmail}>{user?.email}</Text>
         </View>
 
-        {/* Menu Items */}
         <View style={styles.section}>
           <View style={styles.menuCard}>
             <MenuItem
-              icon="person-outline"
+              icon="edit-profile"
               label="Edit Profile"
               onPress={() => router.push('/edit-profile')}
               color="#3B82F6"
             />
             <MenuItem
-              icon="lock-closed-outline"
+              icon="change-password"
               label="Change Password"
               onPress={() => router.push('/change-password')}
               color="#8B5CF6"
@@ -76,11 +74,10 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        {/* Support */}
         <View style={styles.section}>
           <View style={styles.menuCard}>
             <MenuItem
-              icon="help-circle-outline"
+              icon="help"
               label="Help & Support"
               onPress={() => Alert.alert('Help', 'Contact your HR department for assistance.')}
               color="#10B981"
@@ -88,11 +85,10 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        {/* Logout */}
         <View style={styles.section}>
           <View style={styles.menuCard}>
             <MenuItem
-              icon="log-out-outline"
+              icon="logout"
               label="Logout"
               onPress={handleLogout}
               showArrow={false}
@@ -191,5 +187,11 @@ const styles = StyleSheet.create({
   footerText: {
     fontSize: 13,
     color: '#94A3B8',
+  },
+  chevron: {
+    fontSize: 24,
+    lineHeight: 24,
+    color: '#CBD5E1',
+    marginLeft: 12,
   },
 });

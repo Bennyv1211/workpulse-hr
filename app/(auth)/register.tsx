@@ -61,10 +61,11 @@ export default function RegisterScreen() {
   role: selectedRole,
 });
 
-if (
+if (selectedRole === 'manager') {
+  router.replace('/manager/dashboard');
+} else if (
   selectedRole === 'super_admin' ||
-  selectedRole === 'hr_admin' ||
-  selectedRole === 'manager'
+  selectedRole === 'hr_admin'
 ) {
   router.replace('/hr/dashboard');
 } else {

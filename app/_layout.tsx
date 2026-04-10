@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, StyleSheet } from 'react-native';
-import { Stack } from 'expo-router';
+import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { AuthProvider } from '../src/context/AuthContext';
@@ -9,6 +9,8 @@ import { EmploraWordmark } from '../src/components/EmploraLogo';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Font from 'expo-font';
 import { Ionicons } from '@expo/vector-icons';
+import * as Notifications from 'expo-notifications';
+import { configureNotificationChannel } from '../src/lib/notifications';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -20,6 +22,7 @@ export default function RootLayout() {
 
     async function prepare() {
       try {
+        await configureNotificationChannel();
         await Font.loadAsync(Ionicons.font);
         await new Promise((resolve) => setTimeout(resolve, 800));
       } catch (e) {
@@ -35,6 +38,16 @@ export default function RootLayout() {
 
     return () => {
       isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const subscription = Notifications.addNotificationResponseReceivedListener(() => {
+      router.push('/notifications');
+    });
+
+    return () => {
+      subscription.remove();
     };
   }, []);
 

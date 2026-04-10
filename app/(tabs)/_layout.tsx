@@ -1,9 +1,23 @@
 import React, { useEffect } from 'react';
 import { Tabs } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { useAuth, setGlobalTokenSetter } from '../../src/context/AuthContext';
 import { useHRStore } from '../../src/store/hrStore';
+import AppIcon from '../../src/components/AppIcon';
+
+function TabIconWrapper({
+  children,
+  focused,
+}: {
+  children: React.ReactNode;
+  focused: boolean;
+}) {
+  return (
+    <View style={[styles.tabIconWrap, focused && styles.tabIconWrapActive]}>
+      {children}
+    </View>
+  );
+}
 
 export default function TabLayout() {
   const { token } = useAuth();
@@ -42,8 +56,10 @@ export default function TabLayout() {
         name="dashboard"
         options={{
           title: 'Dashboard',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="grid-outline" size={size} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <TabIconWrapper focused={focused}>
+              <AppIcon name="dashboard" size={22} color={color} />
+            </TabIconWrapper>
           ),
         }}
       />
@@ -52,8 +68,10 @@ export default function TabLayout() {
         name="index"
         options={{
           title: 'Clock',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="time-outline" size={size} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <TabIconWrapper focused={focused}>
+              <AppIcon name="clock" size={22} color={color} />
+            </TabIconWrapper>
           ),
         }}
       />
@@ -62,8 +80,10 @@ export default function TabLayout() {
         name="time-off"
         options={{
           title: 'Time Off',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="calendar-outline" size={size} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <TabIconWrapper focused={focused}>
+              <AppIcon name="time-off" size={22} color={color} />
+            </TabIconWrapper>
           ),
         }}
       />
@@ -72,8 +92,10 @@ export default function TabLayout() {
         name="paystubs"
         options={{
           title: 'Pay',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="wallet-outline" size={size} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <TabIconWrapper focused={focused}>
+              <AppIcon name="pay" size={22} color={color} />
+            </TabIconWrapper>
           ),
         }}
       />
@@ -82,8 +104,10 @@ export default function TabLayout() {
         name="profile"
         options={{
           title: 'Me',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="person-outline" size={size} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <TabIconWrapper focused={focused}>
+              <AppIcon name="profile" size={22} color={color} />
+            </TabIconWrapper>
           ),
         }}
       />
@@ -109,5 +133,16 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     marginBottom: 2,
+  },
+  tabIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F8FAFC',
+  },
+  tabIconWrapActive: {
+    backgroundColor: '#DBEAFE',
   },
 });

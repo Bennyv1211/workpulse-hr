@@ -15,10 +15,14 @@ export default function Index() {
       return;
     }
 
+    if (user.role === 'manager') {
+      router.replace('/manager/dashboard');
+      return;
+    }
+
     if (
       user.role === 'super_admin' ||
       user.role === 'hr_admin' ||
-      user.role === 'manager' ||
       user.role === 'hr'
     ) {
       router.replace('/hr/dashboard');

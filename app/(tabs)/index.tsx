@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,7 @@ import * as LocalAuthentication from 'expo-local-authentication';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import NetInfo from '@react-native-community/netinfo';
+import { showLocalNotification } from '../../src/lib/notifications';
 
 const RAW_API_URL =
   process.env.EXPO_PUBLIC_BACKEND_URL ||
@@ -126,6 +127,8 @@ const clearOfflineState = async () => {
 
 export default function ClockScreen() {
   const { user } = useAuth();
+  const autoEndingBreakRef = useRef(false);
+  const autoEndBreakHandlerRef = useRef<() => Promise<void>>(async () => {});
 
   const [currentTime, setCurrentTime] = useState(new Date());
   const [shiftStatus, setShiftStatus] = useState<ShiftStatus>('clocked_out');
@@ -316,8 +319,10 @@ export default function ClockScreen() {
         nextWorkDuration,
         nextBreakTimeLeft
       );
+      autoEndingBreakRef.current = false;
     } else {
       await setLocalShiftState('clocked_out', null, 0, 0);
+      autoEndingBreakRef.current = false;
     }
   } catch (error) {
     console.log('Fetch shift error:', error);
@@ -422,6 +427,11 @@ export default function ClockScreen() {
         const remaining = Math.max(0, breakDuration - elapsed);
 
         setBreakTimeLeft(Math.floor(remaining / 1000));
+
+        if (remaining <= 0 && !isLoading) {
+          await autoEndBreakHandlerRef.current();
+          return;
+        }
 
         const breakStartDate = new Date(breakStartValue);
         const crossedMidnight =
@@ -747,6 +757,44 @@ export default function ClockScreen() {
     }
   };
 
+  const handleAutoEndBreak = useCallback(async () => {
+    if (shiftStatus !== 'on_break' || autoEndingBreakRef.current) {
+      return;
+    }
+
+    autoEndingBreakRef.current = true;
+
+    try {
+      const ok = await sendOrQueueShiftAction(
+        'end_break',
+        '/api/shifts/break/end',
+        'working'
+      );
+
+      if (ok) {
+        await showLocalNotification(
+          'Break ended',
+          isOnline
+            ? 'Your break time expired and you were automatically clocked back in.'
+            : 'Your break expired and your return-to-work action was saved offline for sync.'
+        );
+        Alert.alert(
+          'Break Ended',
+          isOnline
+            ? 'Your break time expired, so you were automatically clocked back in.'
+            : 'Your break expired and the return-to-work action was saved offline. It will sync when internet returns.'
+        );
+      }
+    } catch (error: any) {
+      autoEndingBreakRef.current = false;
+      Alert.alert('Error', error.message || 'Auto end break failed');
+    }
+  }, [isOnline, sendOrQueueShiftAction, shiftStatus]);
+
+  useEffect(() => {
+    autoEndBreakHandlerRef.current = handleAutoEndBreak;
+  }, [handleAutoEndBreak]);
+
   const handleAutoClockOutAtMidnight = async () => {
     if (shiftStatus === 'clocked_out') return;
 
@@ -768,6 +816,12 @@ export default function ClockScreen() {
         { autoClockOut: true }
       );
 
+      await showLocalNotification(
+        'Clocked out automatically',
+        isOnline
+          ? 'You were automatically clocked out at midnight.'
+          : 'Midnight auto clock-out was saved offline and will sync when internet returns.'
+      );
       Alert.alert(
         'Auto Clock Out',
         isOnline

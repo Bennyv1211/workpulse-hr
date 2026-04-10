@@ -25,12 +25,16 @@ type ShiftStatus = 'clocked_out' | 'working' | 'on_break';
 
 interface LeaveRequest {
   id: string;
+  leave_type_id?: string;
+  leave_type_name?: string;
   leave_type?: string;
   type?: string;
   start_date: string;
   end_date: string;
   status: 'pending' | 'approved' | 'rejected' | string;
   reason?: string;
+  note?: string;
+  created_at?: string;
 }
 
 interface ShiftResponse {
@@ -47,10 +51,17 @@ interface AttendanceRow {
   total_hours?: number | null;
 }
 
+interface LeaveBalanceMetric {
+  days: number;
+  hours: number;
+}
+
 interface DashboardData {
   status: ShiftStatus;
   hoursThisWeek: number;
   leaveBalanceHours: number;
+  annualLeave: LeaveBalanceMetric;
+  sickLeave: LeaveBalanceMetric;
   pendingLeaveCount: number;
   approvedLeaveCount: number;
   rejectedLeaveCount: number;
@@ -72,6 +83,8 @@ export default function EmployeeDashboardScreen() {
     status: 'clocked_out',
     hoursThisWeek: 0,
     leaveBalanceHours: 0,
+    annualLeave: { days: 0, hours: 0 },
+    sickLeave: { days: 0, hours: 0 },
     pendingLeaveCount: 0,
     approvedLeaveCount: 0,
     rejectedLeaveCount: 0,
@@ -160,7 +173,7 @@ export default function EmployeeDashboardScreen() {
         await Promise.allSettled([
           apiRequest('/api/shifts/current'),
           apiRequest(`/api/attendance?start_date=${startDate}&end_date=${endDate}`),
-          apiRequest('/api/leave-requests/my'),
+          apiRequest('/api/time-off'),
           apiRequest('/api/leave-balance/me'),
         ]);
 
@@ -197,19 +210,31 @@ export default function EmployeeDashboardScreen() {
       let rejectedLeaveCount = 0;
 
       if (leaveData.status === 'fulfilled' && Array.isArray(leaveData.value)) {
-        leaveRequests = leaveData.value as LeaveRequest[];
+        leaveRequests = (leaveData.value as LeaveRequest[]).map((request) => ({
+          ...request,
+          status: request.status === 'denied' ? 'rejected' : request.status,
+          reason: request.reason || request.note,
+        }));
 
         pendingLeaveCount = leaveRequests.filter((r) => r.status === 'pending').length;
         approvedLeaveCount = leaveRequests.filter((r) => r.status === 'approved').length;
         rejectedLeaveCount = leaveRequests.filter((r) => r.status === 'rejected').length;
 
-        leaveRequests = [...leaveRequests].sort(
-          (a, b) =>
-            new Date(b.start_date).getTime() - new Date(a.start_date).getTime()
-        );
+        leaveRequests = [...leaveRequests]
+          .filter(
+            (request, index, allRequests) =>
+              allRequests.findIndex((item) => item.id === request.id) === index
+          )
+          .sort((a, b) => {
+            const aDate = new Date(a.created_at || a.start_date).getTime();
+            const bDate = new Date(b.created_at || b.start_date).getTime();
+            return bDate - aDate;
+          });
       }
 
       let leaveBalanceHours = 0;
+      let annualLeave: LeaveBalanceMetric = { days: 0, hours: 0 };
+      let sickLeave: LeaveBalanceMetric = { days: 0, hours: 0 };
       if (leaveBalanceData.status === 'fulfilled' && leaveBalanceData.value) {
         const value = leaveBalanceData.value;
         leaveBalanceHours = Number(
@@ -219,12 +244,30 @@ export default function EmployeeDashboardScreen() {
             value?.balance_hours ??
             0
         );
+
+        annualLeave = {
+          days: Number(value?.details?.['Annual Leave']?.days ?? 0),
+          hours: Number(value?.details?.['Annual Leave']?.hours ?? 0),
+        };
+
+        sickLeave = {
+          days: Number(value?.details?.['Sick Leave']?.days ?? 0),
+          hours: Number(value?.details?.['Sick Leave']?.hours ?? 0),
+        };
       }
 
       setDashboard({
         status: currentStatus,
         hoursThisWeek: Number(hoursThisWeek.toFixed(2)),
         leaveBalanceHours: Number(leaveBalanceHours.toFixed(2)),
+        annualLeave: {
+          days: Number(annualLeave.days.toFixed(2)),
+          hours: Number(annualLeave.hours.toFixed(2)),
+        },
+        sickLeave: {
+          days: Number(sickLeave.days.toFixed(2)),
+          hours: Number(sickLeave.hours.toFixed(2)),
+        },
         pendingLeaveCount,
         approvedLeaveCount,
         rejectedLeaveCount,
@@ -296,7 +339,7 @@ export default function EmployeeDashboardScreen() {
   };
 
   const getLeaveType = (item: LeaveRequest) => {
-    return item.leave_type || item.type || 'Leave';
+    return item.leave_type_name || item.leave_type || item.type || 'Leave';
   };
 
   const getStatusColors = (status: string) => {
@@ -363,18 +406,36 @@ export default function EmployeeDashboardScreen() {
               <Ionicons name="airplane-outline" size={20} color="#8B5CF6" />
             </View>
             <Text style={styles.summaryValue}>
-              {dashboard.leaveBalanceHours.toFixed(1)}h
+              {dashboard.annualLeave.days.toFixed(1)}d
             </Text>
-            <Text style={styles.summaryLabel}>Leave Balance</Text>
+            <Text style={styles.summaryLabel}>
+              Annual Leave ({dashboard.annualLeave.hours.toFixed(1)}h)
+            </Text>
           </View>
 
           <View style={styles.summaryCard}>
             <View style={styles.summaryIconWrap}>
-              <Ionicons name="document-text-outline" size={20} color="#F59E0B" />
+              <Ionicons name="medkit-outline" size={20} color="#EF4444" />
             </View>
-            <Text style={styles.summaryValue}>{dashboard.pendingLeaveCount}</Text>
-            <Text style={styles.summaryLabel}>Pending Requests</Text>
+            <Text style={styles.summaryValue}>
+              {dashboard.sickLeave.days.toFixed(1)}d
+            </Text>
+            <Text style={styles.summaryLabel}>
+              Sick Leave ({dashboard.sickLeave.hours.toFixed(1)}h)
+            </Text>
           </View>
+        </View>
+
+        <View style={styles.totalLeaveCard}>
+          <View>
+            <Text style={styles.totalLeaveTitle}>Total Leave Balance</Text>
+            <Text style={styles.totalLeaveSub}>
+              Combined available leave across tracked balances
+            </Text>
+          </View>
+          <Text style={styles.totalLeaveValue}>
+            {dashboard.leaveBalanceHours.toFixed(1)}h
+          </Text>
         </View>
 
         <View style={styles.sectionCard}>
@@ -567,6 +628,36 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.04,
     shadowRadius: 8,
     elevation: 2,
+  },
+  totalLeaveCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 18,
+    marginBottom: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  totalLeaveTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  totalLeaveSub: {
+    marginTop: 4,
+    fontSize: 13,
+    color: '#64748B',
+  },
+  totalLeaveValue: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#2563EB',
   },
   sectionHeader: {
     marginBottom: 14,
