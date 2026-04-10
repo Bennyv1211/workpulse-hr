@@ -38,6 +38,8 @@ interface RegisterData {
   first_name: string;
   last_name: string;
   role?: string;
+  security_question: string;
+  security_answer: string;
 }
 
 interface AuthContextType {

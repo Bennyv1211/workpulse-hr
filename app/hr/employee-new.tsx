@@ -117,6 +117,8 @@ export default function HREmployeeNewScreen() {
   const [dateOfBirth, setDateOfBirth] = useState('');
   const [temporaryPassword, setTemporaryPassword] = useState('');
   const [showTemporaryPassword, setShowTemporaryPassword] = useState(false);
+  const [regularStartTime, setRegularStartTime] = useState('09:00');
+  const [regularEndTime, setRegularEndTime] = useState('17:00');
   const [hourlyRate, setHourlyRate] = useState('');
   const [salary, setSalary] = useState('');
   const [payType, setPayType] = useState<PayType>('hourly');
@@ -306,6 +308,8 @@ export default function HREmployeeNewScreen() {
         pay_type: 'hourly',
         hourly_rate: 25,
         annual_salary: '',
+        regular_start_time: '09:00',
+        regular_end_time: '17:00',
         temporary_password: 'Temp123!',
         annual_leave_days: 10,
         sick_leave_days: 10,
@@ -348,7 +352,12 @@ export default function HREmployeeNewScreen() {
       {
         field: 'temporary_password',
         required: 'yes',
-        description: 'At least 6 characters',
+        description: 'At least 8 characters with uppercase, number, and special character',
+      },
+      {
+        field: 'regular_start_time / regular_end_time',
+        required: 'no',
+        description: 'Use HH:MM 24-hour format like 09:00 and 17:00',
       },
       {
         field: 'start_date / date_of_birth',
@@ -463,6 +472,8 @@ export default function HREmployeeNewScreen() {
         const departmentValue = String(row.department || '').trim();
         const start = String(row.start_date || '').trim();
         const tempPassword = String(row.temporary_password || '').trim();
+        const regularStart = String(row.regular_start_time || '09:00').trim();
+        const regularEnd = String(row.regular_end_time || '17:00').trim();
         const payTypeValue = normalizeImportedPayType(String(row.pay_type || 'hourly'));
         const departmentLookupId = findDepartmentIdByName(departmentValue);
 
@@ -518,6 +529,8 @@ export default function HREmployeeNewScreen() {
           employment_type: String(row.employment_type || 'Full-time').trim() || 'Full-time',
           start_date: start,
           date_of_birth: String(row.date_of_birth || '').trim() || null,
+          regular_start_time: regularStart || null,
+          regular_end_time: regularEnd || null,
           hourly_rate: payTypeValue === 'hourly' ? Number(hourlyRateValue) : null,
           salary: payTypeValue === 'salary' ? Number(annualSalaryValue) : null,
           work_location: 'Office',
@@ -602,8 +615,8 @@ export default function HREmployeeNewScreen() {
       return;
     }
 
-    if (temporaryPassword.trim().length < 6) {
-      Alert.alert('Weak Temporary Password', 'Temporary password must be at least 6 characters.');
+    if (temporaryPassword.trim().length < 8) {
+      Alert.alert('Weak Temporary Password', 'Temporary password must be at least 8 characters.');
       return;
     }
 
@@ -628,6 +641,8 @@ export default function HREmployeeNewScreen() {
         employment_type: employmentType,
         start_date: startDate.trim(),
         date_of_birth: dateOfBirth.trim() || null,
+        regular_start_time: regularStartTime.trim() || null,
+        regular_end_time: regularEndTime.trim() || null,
         hourly_rate: payType === 'hourly' ? Number(hourlyRate) : null,
         salary: payType === 'salary' ? Number(salary) : null,
         work_location: 'Office',
@@ -947,6 +962,22 @@ export default function HREmployeeNewScreen() {
                     </TouchableOpacity>
                   </View>
                 </View>
+
+                <InputField
+                  label="Regular Start Time"
+                  value={regularStartTime}
+                  onChangeText={setRegularStartTime}
+                  placeholder="09:00"
+                  onFocus={() => setShowDepartmentDropdown(false)}
+                />
+
+                <InputField
+                  label="Regular End Time"
+                  value={regularEndTime}
+                  onChangeText={setRegularEndTime}
+                  placeholder="17:00"
+                  onFocus={() => setShowDepartmentDropdown(false)}
+                />
               </View>
 
               <View style={styles.card}>

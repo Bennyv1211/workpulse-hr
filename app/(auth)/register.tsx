@@ -22,6 +22,8 @@ export default function RegisterScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [securityQuestion, setSecurityQuestion] = useState("What is your first pet's name?");
+  const [securityAnswer, setSecurityAnswer] = useState('');
   const [selectedRole, setSelectedRole] = useState('super_admin');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -34,9 +36,15 @@ export default function RegisterScreen() {
     { id: 'manager', label: 'Manager', icon: 'briefcase' },
     { id: 'employee', label: 'Employee', icon: 'person' },
   ];
+  const securityQuestions = [
+    "What is your first pet's name?",
+    'What city were you born in?',
+    'What was the name of your first school?',
+    'What is your mother’s maiden name?',
+  ];
 
   const handleRegister = async () => {
-    if (!firstName.trim() || !lastName.trim() || !email.trim() || !password.trim()) {
+    if (!firstName.trim() || !lastName.trim() || !email.trim() || !password.trim() || !securityAnswer.trim()) {
       Alert.alert('Error', 'Please fill in all fields');
       return;
     }
@@ -46,8 +54,8 @@ export default function RegisterScreen() {
       return;
     }
 
-    if (password.length < 6) {
-      Alert.alert('Error', 'Password must be at least 6 characters');
+    if (password.length < 8) {
+      Alert.alert('Error', 'Password must be at least 8 characters');
       return;
     }
 
@@ -59,6 +67,8 @@ export default function RegisterScreen() {
   email: email.trim(),
   password,
   role: selectedRole,
+  security_question: securityQuestion,
+  security_answer: securityAnswer.trim(),
 });
 
 if (selectedRole === 'manager') {
@@ -179,6 +189,50 @@ if (selectedRole === 'manager') {
                   value={confirmPassword}
                   onChangeText={setConfirmPassword}
                   secureTextEntry={!showPassword}
+                />
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Security Question</Text>
+              <View style={styles.roleGrid}>
+                {securityQuestions.map((question) => (
+                  <TouchableOpacity
+                    key={question}
+                    style={[
+                      styles.roleCard,
+                      securityQuestion === question && styles.roleCardSelected,
+                    ]}
+                    onPress={() => setSecurityQuestion(question)}
+                  >
+                    <Ionicons
+                      name="help-circle-outline"
+                      size={22}
+                      color={securityQuestion === question ? '#3B82F6' : '#64748B'}
+                    />
+                    <Text
+                      style={[
+                        styles.roleLabel,
+                        securityQuestion === question && styles.roleLabelSelected,
+                      ]}
+                    >
+                      {question}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Security Answer</Text>
+              <View style={styles.inputContainer}>
+                <Ionicons name="shield-checkmark-outline" size={20} color="#64748B" style={styles.inputIcon} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Enter your answer"
+                  placeholderTextColor="#94A3B8"
+                  value={securityAnswer}
+                  onChangeText={setSecurityAnswer}
                 />
               </View>
             </View>

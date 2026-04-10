@@ -6,6 +6,7 @@ type AppIconName =
   | 'clock'
   | 'time-off'
   | 'pay'
+  | 'schedule'
   | 'profile'
   | 'employees'
   | 'add-employee'
@@ -76,6 +77,19 @@ export default function AppIcon({
           <Circle cx="12" cy="12" r="2.3" {...commonStroke} />
           <Path d="M7 10.5H7.01" {...commonStroke} />
           <Path d="M17 13.5H17.01" {...commonStroke} />
+        </Svg>
+      );
+
+    case 'schedule':
+      return (
+        <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+          <Rect x="4" y="5.5" width="16" height="14" rx="2.8" {...commonStroke} />
+          <Path d="M8 4.5V8" {...commonStroke} />
+          <Path d="M16 4.5V8" {...commonStroke} />
+          <Path d="M4 10.5H20" {...commonStroke} />
+          <Path d="M8.5 14h2.5" {...commonStroke} />
+          <Path d="M13 14h2.5" {...commonStroke} />
+          <Path d="M8.5 17h7" {...commonStroke} />
         </Svg>
       );
 

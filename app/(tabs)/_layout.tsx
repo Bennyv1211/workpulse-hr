@@ -89,6 +89,18 @@ export default function TabLayout() {
       />
 
       <Tabs.Screen
+        name="schedule"
+        options={{
+          title: 'Schedule',
+          tabBarIcon: ({ color, focused }) => (
+            <TabIconWrapper focused={focused}>
+              <AppIcon name="schedule" size={22} color={color} />
+            </TabIconWrapper>
+          ),
+        }}
+      />
+
+      <Tabs.Screen
         name="paystubs"
         options={{
           title: 'Pay',
