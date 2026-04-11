@@ -125,6 +125,46 @@ async def require_manager(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Manager access required")
     return current_user
 
+
+async def ensure_company_for_user(user: dict) -> Optional[str]:
+    if user.get("company_id"):
+        return user.get("company_id")
+
+    employee = await db.employees.find_one({"user_id": user["id"]}) or await db.employees.find_one({"email": user["email"]})
+    if employee and employee.get("company_id"):
+        await db.users.update_one(
+            {"id": user["id"]},
+            {"$set": {"company_id": employee["company_id"], "updated_at": datetime.utcnow()}},
+        )
+        user["company_id"] = employee["company_id"]
+        return employee["company_id"]
+
+    if user["role"] in ["super_admin", "hr_admin", "hr"]:
+        company_id = str(uuid.uuid4())
+        company_name = f"{user.get('first_name', 'HR')}'s Workspace"
+        now = datetime.utcnow()
+        await db.companies.insert_one(
+            {
+                "id": company_id,
+                "name": company_name,
+                "owner_user_id": user["id"],
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+        await db.users.update_one(
+            {"id": user["id"]},
+            {"$set": {"company_id": company_id, "updated_at": now}},
+        )
+        user["company_id"] = company_id
+        return company_id
+
+    return None
+
+
+async def get_current_company_id(current_user: dict) -> Optional[str]:
+    return await ensure_company_for_user(current_user)
+
 # ===== Pydantic Models =====
 def make_pdf_bytes(
     employee_name: str,
@@ -292,6 +332,7 @@ async def save_notification(
     notification_type: str = "info",
     target_role: str = "all",
     target_user_id: Optional[str] = None,
+    company_id: Optional[str] = None,
     data: Optional[Dict[str, Any]] = None,
 ):
     notification = {
@@ -301,6 +342,7 @@ async def save_notification(
         "message": message,
         "target_role": target_role,
         "target_user_id": target_user_id,
+        "company_id": company_id,
         "data": data or {},
         "read": False,
         "created_at": datetime.utcnow(),
@@ -383,12 +425,15 @@ async def notify_user(
     if not user_id:
         return
 
+    user = await db.users.find_one({"id": user_id})
+
     await save_notification(
         title=title,
         message=message,
         notification_type=notification_type,
         target_role="all",
         target_user_id=user_id,
+        company_id=(user or {}).get("company_id"),
         data=data,
     )
     tokens = await get_active_push_tokens_for_user(user_id)
@@ -872,6 +917,7 @@ class UserResponse(BaseModel):
     last_name: str
     role: str
     employee_id: Optional[str] = None
+    company_id: Optional[str] = None
     security_question: Optional[str] = None
     onboarding_completed: bool = False
     created_at: datetime
@@ -945,7 +991,8 @@ class EmployeeCreate(BaseModel):
     temporary_password: Optional[str] = None
     phone: Optional[str] = None
     job_title: str
-    department_id: str
+    department_id: Optional[str] = None
+    department_name: Optional[str] = None
     manager_id: Optional[str] = None
     work_location_id: Optional[str] = None
     work_location: Optional[str] = "Office"
@@ -978,6 +1025,7 @@ class EmployeeUpdate(BaseModel):
     phone: Optional[str] = None
     job_title: Optional[str] = None
     department_id: Optional[str] = None
+    department_name: Optional[str] = None
     manager_id: Optional[str] = None
     work_location_id: Optional[str] = None
     work_location: Optional[str] = None
@@ -1213,9 +1261,15 @@ async def build_schedule_entry_response(schedule: dict) -> ScheduleEntryResponse
 # ===== Schedule Routes =====
 @api_router.post("/schedule/create", response_model=ScheduleEntryResponse)
 async def create_schedule_entry(payload: ScheduleCreate, current_user: dict = Depends(require_manager)):
-    employee = await db.employees.find_one({"id": payload.employee_id, "status": "active"})
+    company_id = await get_current_company_id(current_user)
+    employee = await db.employees.find_one({"id": payload.employee_id, "status": "active", "company_id": company_id})
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
+
+    if current_user["role"] == "manager":
+        manager_employee = await db.employees.find_one({"user_id": current_user["id"], "company_id": company_id}) or await db.employees.find_one({"email": current_user["email"], "company_id": company_id})
+        if not manager_employee or manager_employee.get("department_id") != employee.get("department_id"):
+            raise HTTPException(status_code=403, detail="Managers can only schedule employees in their department")
 
     normalized_start = normalize_time_string(payload.start_time)
     normalized_end = normalize_time_string(payload.end_time)
@@ -1226,6 +1280,7 @@ async def create_schedule_entry(payload: ScheduleCreate, current_user: dict = De
     now = datetime.utcnow()
     schedule_doc = {
         "employee_id": payload.employee_id,
+        "company_id": company_id,
         "department_id": employee.get("department_id"),
         "date": payload.date,
         "start_time": normalized_start,
@@ -1249,7 +1304,8 @@ async def create_schedule_entry(payload: ScheduleCreate, current_user: dict = De
 
 @api_router.put("/schedule/update", response_model=ScheduleEntryResponse)
 async def update_schedule_entry(payload: ScheduleUpdate, current_user: dict = Depends(require_manager)):
-    existing = await db.schedules.find_one({"id": payload.schedule_id})
+    company_id = await get_current_company_id(current_user)
+    existing = await db.schedules.find_one({"id": payload.schedule_id, "company_id": company_id})
     if not existing:
         raise HTTPException(status_code=404, detail="Schedule entry not found")
 
@@ -1264,8 +1320,8 @@ async def update_schedule_entry(payload: ScheduleUpdate, current_user: dict = De
             raise HTTPException(status_code=400, detail="Invalid end time")
     update_fields["updated_at"] = datetime.utcnow()
 
-    await db.schedules.update_one({"id": payload.schedule_id}, {"$set": update_fields})
-    saved = await db.schedules.find_one({"id": payload.schedule_id})
+    await db.schedules.update_one({"id": payload.schedule_id, "company_id": company_id}, {"$set": update_fields})
+    saved = await db.schedules.find_one({"id": payload.schedule_id, "company_id": company_id})
     await log_activity(current_user["id"], "schedule_updated", f"Schedule updated for employee {saved['employee_id']} on {saved['date']}")
     return await build_schedule_entry_response(saved)
 
@@ -1281,7 +1337,7 @@ async def get_employee_schedule(
         if not employee or employee["id"] != employee_id:
             raise HTTPException(status_code=403, detail="You can only view your own schedule")
 
-    query: Dict[str, Any] = {"employee_id": employee_id}
+    query: Dict[str, Any] = {"employee_id": employee_id, "company_id": await get_current_company_id(current_user)}
     if week_start:
         start_dt = datetime.fromisoformat(week_start)
         end_dt = start_dt + timedelta(days=6)
@@ -1296,6 +1352,7 @@ async def get_schedule_week(date_value: str, current_user: dict = Depends(get_cu
     start_dt = datetime.fromisoformat(date_value)
     end_dt = start_dt + timedelta(days=6)
     query: Dict[str, Any] = {
+        "company_id": await get_current_company_id(current_user),
         "date": {"$gte": start_dt.strftime("%Y-%m-%d"), "$lte": end_dt.strftime("%Y-%m-%d")}
     }
 
@@ -1316,9 +1373,15 @@ async def get_schedule_week(date_value: str, current_user: dict = Depends(get_cu
 
 @api_router.post("/schedule/department/apply")
 async def apply_schedule_to_department(payload: DepartmentScheduleApply, current_user: dict = Depends(require_manager)):
-    department = await db.departments.find_one({"id": payload.department_id})
+    company_id = await get_current_company_id(current_user)
+    department = await db.departments.find_one({"id": payload.department_id, "company_id": company_id})
     if not department:
         raise HTTPException(status_code=404, detail="Department not found")
+
+    if current_user["role"] == "manager":
+        manager_employee = await db.employees.find_one({"user_id": current_user["id"], "company_id": company_id}) or await db.employees.find_one({"email": current_user["email"], "company_id": company_id})
+        if not manager_employee or manager_employee.get("department_id") != payload.department_id:
+            raise HTTPException(status_code=403, detail="Managers can only apply schedules to their own department")
 
     normalized_start = normalize_time_string(payload.start_time)
     normalized_end = normalize_time_string(payload.end_time)
@@ -1326,7 +1389,7 @@ async def apply_schedule_to_department(payload: DepartmentScheduleApply, current
         raise HTTPException(status_code=400, detail="Invalid schedule time format")
 
     week_start = datetime.fromisoformat(payload.week_start_date)
-    employees = await db.employees.find({"department_id": payload.department_id, "status": "active"}).to_list(500)
+    employees = await db.employees.find({"department_id": payload.department_id, "status": "active", "company_id": company_id}).to_list(500)
     applied_count = 0
     now = datetime.utcnow()
 
@@ -1336,6 +1399,7 @@ async def apply_schedule_to_department(payload: DepartmentScheduleApply, current
             existing = await db.schedules.find_one({"employee_id": employee["id"], "date": shift_date})
             schedule_doc = {
                 "employee_id": employee["id"],
+                "company_id": company_id,
                 "department_id": payload.department_id,
                 "date": shift_date,
                 "start_time": normalized_start,
@@ -1734,6 +1798,7 @@ async def ensure_employee_user_account(
     last_name: str,
     role: str,
     temporary_password: Optional[str],
+    company_id: Optional[str],
     existing_user_id: Optional[str] = None,
 ):
     normalized_email = email.lower()
@@ -1753,6 +1818,7 @@ async def ensure_employee_user_account(
         "last_name": last_name,
         "role": role,
         "employee_id": employee_id,
+        "company_id": company_id,
         "updated_at": datetime.utcnow(),
     }
     if temporary_password:
@@ -1774,6 +1840,7 @@ async def ensure_employee_user_account(
         "last_name": last_name,
         "role": role,
         "employee_id": employee_id,
+        "company_id": company_id,
         "security_question": None,
         "security_answer_hash": None,
         "security_reset_failed_attempts": 0,
@@ -1788,7 +1855,7 @@ async def ensure_employee_user_account(
 
 async def sync_shift_clock_in_to_attendance(employee: dict, local_time: Optional[str], timezone: Optional[str], latitude: Optional[float], longitude: Optional[float], clock_in_time: datetime):
     today = clock_in_time.strftime("%Y-%m-%d")
-    existing = await db.attendance.find_one({"employee_id": employee["id"], "date": today})
+    existing = await db.attendance.find_one({"employee_id": employee["id"], "date": today, "company_id": employee.get("company_id")})
     schedule = await get_schedule_for_employee_date(employee, today)
     scheduled_start_time = normalize_time_string((schedule or {}).get("start_time"))
     scheduled_end_time = normalize_time_string((schedule or {}).get("end_time"))
@@ -1796,6 +1863,7 @@ async def sync_shift_clock_in_to_attendance(employee: dict, local_time: Optional
 
     payload = {
         "employee_id": employee["id"],
+        "company_id": employee.get("company_id"),
         "date": today,
         "clock_in": clock_in_time,
         "clock_in_local": local_time,
@@ -1818,6 +1886,7 @@ async def sync_shift_clock_in_to_attendance(employee: dict, local_time: Optional
     attendance_id = str(uuid.uuid4())
     payload.update({
         "id": attendance_id,
+        "company_id": employee.get("company_id"),
         "clock_out": None,
         "clock_out_local": None,
         "clock_out_location": None,
@@ -1851,6 +1920,7 @@ async def sync_shift_clock_out_to_attendance(employee: dict, local_time: Optiona
     payload.update({
         "id": attendance_id,
         "employee_id": employee["id"],
+        "company_id": employee.get("company_id"),
         "date": today,
         "clock_in": None,
         "clock_in_local": None,
@@ -1871,8 +1941,18 @@ async def register(user_data: UserCreate):
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
     validate_password_strength(user_data.password)
-    
     user_id = str(uuid.uuid4())
+    company_id = None
+    if user_data.role in ["super_admin", "hr_admin", "hr"]:
+        company_id = str(uuid.uuid4())
+        now = datetime.utcnow()
+        await db.companies.insert_one({
+            "id": company_id,
+            "name": f"{user_data.first_name}'s Workspace",
+            "owner_user_id": user_id,
+            "created_at": now,
+            "updated_at": now,
+        })
     user = {
         "id": user_id,
         "email": user_data.email.lower(),
@@ -1880,6 +1960,7 @@ async def register(user_data: UserCreate):
         "first_name": user_data.first_name,
         "last_name": user_data.last_name,
         "role": user_data.role,
+        "company_id": company_id,
         "security_question": user_data.security_question,
         "security_answer_hash": get_password_hash(user_data.security_answer.strip().lower()),
         "security_reset_failed_attempts": 0,
@@ -1905,6 +1986,7 @@ async def register(user_data: UserCreate):
             last_name=user["last_name"],
             role=user["role"],
             employee_id=user["employee_id"],
+            company_id=user.get("company_id"),
             security_question=user.get("security_question"),
             onboarding_completed=user["onboarding_completed"],
             created_at=user["created_at"]
@@ -1935,6 +2017,7 @@ async def login(credentials: UserLogin):
             last_name=user["last_name"],
             role=user["role"],
             employee_id=user.get("employee_id"),
+            company_id=user.get("company_id"),
             security_question=user.get("security_question"),
             onboarding_completed=user.get("onboarding_completed", False),
             created_at=user["created_at"]
@@ -1950,6 +2033,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         last_name=current_user["last_name"],
         role=current_user["role"],
         employee_id=current_user.get("employee_id"),
+        company_id=current_user.get("company_id"),
         security_question=current_user.get("security_question"),
         onboarding_completed=current_user.get("onboarding_completed", False),
         created_at=current_user["created_at"]
@@ -2465,6 +2549,7 @@ async def create_time_off_request(data: TimeOffRequest, current_user: dict = Dep
     request = {
         "id": request_id,
         "employee_id": employee["id"],
+        "company_id": employee.get("company_id"),
         "leave_type_id": selected_leave_type_id,
         "leave_type_name": leave_type_name,
         "start_date": data.start_date,
@@ -2481,6 +2566,7 @@ async def create_time_off_request(data: TimeOffRequest, current_user: dict = Dep
     mirrored_leave_request = {
         "id": str(uuid.uuid4()),
         "employee_id": employee["id"],
+        "company_id": employee.get("company_id"),
         "leave_type_id": selected_leave_type_id or "time_off",
         "leave_type_name": leave_type_name,
         "start_date": data.start_date,
@@ -2787,7 +2873,8 @@ async def admin_get_time_off_requests(
     current_user: dict = Depends(require_admin)
 ):
     """Get all time-off requests (admin/manager only)"""
-    query = {}
+    company_id = await get_current_company_id(current_user)
+    query = {"company_id": company_id} if company_id else {}
     if status:
         query["status"] = status
     
@@ -2979,6 +3066,7 @@ async def verify_location(lat: float, lon: float, employee: dict = None) -> tupl
 # ===== Department Routes =====
 @api_router.post("/departments", response_model=DepartmentResponse)
 async def create_department(dept: DepartmentCreate, current_user: dict = Depends(require_admin)):
+    company_id = await get_current_company_id(current_user)
     dept_id = str(uuid.uuid4())
     manager_name = None
     if dept.manager_id:
@@ -2988,6 +3076,7 @@ async def create_department(dept: DepartmentCreate, current_user: dict = Depends
     
     department = {
         "id": dept_id,
+        "company_id": company_id,
         "name": dept.name,
         "description": dept.description,
         "manager_id": dept.manager_id,
@@ -3011,10 +3100,18 @@ async def create_department(dept: DepartmentCreate, current_user: dict = Depends
 
 @api_router.get("/departments", response_model=List[DepartmentResponse])
 async def get_departments(current_user: dict = Depends(get_current_user)):
-    departments = await db.departments.find().to_list(1000)
+    company_id = await get_current_company_id(current_user)
+    department_query: Dict[str, Any] = {"company_id": company_id}
+    if current_user["role"] == "manager":
+        manager_employee = await db.employees.find_one({"user_id": current_user["id"], "company_id": company_id}) or await db.employees.find_one({"email": current_user["email"], "company_id": company_id})
+        if not manager_employee or not manager_employee.get("department_id"):
+            return []
+        department_query["id"] = manager_employee["department_id"]
+
+    departments = await db.departments.find(department_query).to_list(1000)
     result = []
     for dept in departments:
-        employee_count = await db.employees.count_documents({"department_id": dept["id"], "status": "active"})
+        employee_count = await db.employees.count_documents({"department_id": dept["id"], "status": "active", "company_id": company_id})
         manager_name = None
         if dept.get("manager_id"):
             manager = await db.employees.find_one({"id": dept["manager_id"]})
@@ -3034,11 +3131,12 @@ async def get_departments(current_user: dict = Depends(get_current_user)):
 
 @api_router.get("/departments/{dept_id}", response_model=DepartmentResponse)
 async def get_department(dept_id: str, current_user: dict = Depends(get_current_user)):
-    dept = await db.departments.find_one({"id": dept_id})
+    company_id = await get_current_company_id(current_user)
+    dept = await db.departments.find_one({"id": dept_id, "company_id": company_id})
     if not dept:
         raise HTTPException(status_code=404, detail="Department not found")
     
-    employee_count = await db.employees.count_documents({"department_id": dept_id, "status": "active"})
+    employee_count = await db.employees.count_documents({"department_id": dept_id, "status": "active", "company_id": company_id})
     manager_name = None
     if dept.get("manager_id"):
         manager = await db.employees.find_one({"id": dept["manager_id"]})
@@ -3058,8 +3156,9 @@ async def get_department(dept_id: str, current_user: dict = Depends(get_current_
 
 @api_router.put("/departments/{dept_id}", response_model=DepartmentResponse)
 async def update_department(dept_id: str, dept_data: DepartmentCreate, current_user: dict = Depends(require_admin)):
+    company_id = await get_current_company_id(current_user)
     await db.departments.update_one(
-        {"id": dept_id},
+        {"id": dept_id, "company_id": company_id},
         {"$set": {
             "name": dept_data.name,
             "description": dept_data.description,
@@ -3073,18 +3172,57 @@ async def update_department(dept_id: str, dept_data: DepartmentCreate, current_u
 
 @api_router.delete("/departments/{dept_id}")
 async def delete_department(dept_id: str, current_user: dict = Depends(require_admin)):
-    await db.departments.delete_one({"id": dept_id})
+    company_id = await get_current_company_id(current_user)
+    await db.departments.delete_one({"id": dept_id, "company_id": company_id})
     await log_activity(current_user["id"], "department_deleted", f"Department deleted: {dept_id}")
     return {"message": "Department deleted"}
+
+
+async def resolve_employee_department(
+    company_id: Optional[str],
+    department_id: Optional[str] = None,
+    department_name: Optional[str] = None,
+) -> dict:
+    resolved_department = None
+
+    if department_id:
+        resolved_department = await db.departments.find_one({"id": department_id, "company_id": company_id})
+
+    normalized_name = (department_name or "").strip()
+    if not resolved_department and normalized_name:
+        resolved_department = await db.departments.find_one({
+            "name": {"$regex": f"^{re.escape(normalized_name)}$", "$options": "i"},
+            "company_id": company_id,
+        })
+
+    if not resolved_department and normalized_name:
+        now = datetime.utcnow()
+        resolved_department = {
+            "id": str(uuid.uuid4()),
+            "company_id": company_id,
+            "name": normalized_name,
+            "description": None,
+            "manager_id": None,
+            "budget": None,
+            "created_at": now,
+            "updated_at": now,
+        }
+        await db.departments.insert_one(resolved_department)
+
+    if not resolved_department:
+        raise HTTPException(status_code=400, detail="Department is required")
+
+    return resolved_department
 
 # ===== Employee Routes =====
 @api_router.post("/employees", response_model=EmployeeResponse)
 async def create_employee(emp: EmployeeCreate, current_user: dict = Depends(require_admin)):
-    existing = await db.employees.find_one({"employee_id": emp.employee_id})
+    company_id = await get_current_company_id(current_user)
+    existing = await db.employees.find_one({"employee_id": emp.employee_id, "company_id": company_id})
     if existing:
         raise HTTPException(status_code=400, detail="Employee ID already exists")
 
-    existing_email = await db.employees.find_one({"email": emp.email.lower()})
+    existing_email = await db.employees.find_one({"email": emp.email.lower(), "company_id": company_id})
     if existing_email:
         raise HTTPException(status_code=400, detail="Employee email already exists")
 
@@ -3095,7 +3233,11 @@ async def create_employee(emp: EmployeeCreate, current_user: dict = Depends(requ
     
     emp_id = str(uuid.uuid4())
     role = normalize_employee_role(emp.role)
-    dept = await db.departments.find_one({"id": emp.department_id})
+    dept = await resolve_employee_department(
+        company_id=company_id,
+        department_id=emp.department_id,
+        department_name=emp.department_name,
+    )
     dept_name = dept["name"] if dept else None
     
     manager_name = None
@@ -3118,6 +3260,7 @@ async def create_employee(emp: EmployeeCreate, current_user: dict = Depends(requ
         last_name=emp.last_name,
         role=role,
         temporary_password=emp.temporary_password,
+        company_id=company_id,
         existing_user_id=emp.user_id,
     )
     
@@ -3129,9 +3272,10 @@ async def create_employee(emp: EmployeeCreate, current_user: dict = Depends(requ
         "last_name": emp.last_name,
         "email": emp.email.lower(),
         "role": role,
+        "company_id": company_id,
         "phone": emp.phone,
         "job_title": emp.job_title,
-        "department_id": emp.department_id,
+        "department_id": dept["id"],
         "manager_id": emp.manager_id,
         "work_location_id": emp.work_location_id,
         "work_location": emp.work_location,
@@ -3170,7 +3314,7 @@ async def create_employee(emp: EmployeeCreate, current_user: dict = Depends(requ
         role=role,
         phone=emp.phone,
         job_title=emp.job_title,
-        department_id=emp.department_id,
+        department_id=dept["id"],
         department_name=dept_name,
         manager_id=emp.manager_id,
         manager_name=manager_name,
@@ -3208,7 +3352,8 @@ async def get_employees(
     search: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
 ):
-    query = {}
+    company_id = await get_current_company_id(current_user)
+    query = {"company_id": company_id} if company_id else {}
     if status:
         query["status"] = status
     if department_id:
@@ -3220,9 +3365,18 @@ async def get_employees(
             {"email": {"$regex": search, "$options": "i"}},
             {"employee_id": {"$regex": search, "$options": "i"}}
         ]
+
+    if current_user["role"] == "manager":
+        manager_employee = await db.employees.find_one({"user_id": current_user["id"], "company_id": company_id}) or await db.employees.find_one({"email": current_user["email"], "company_id": company_id})
+        if not manager_employee:
+            return []
+        query["department_id"] = manager_employee.get("department_id")
     
     employees = await db.employees.find(query).to_list(1000)
-    departments = {d["id"]: d["name"] for d in await db.departments.find().to_list(100)}
+    departments = {
+        d["id"]: d["name"]
+        for d in await db.departments.find({"company_id": company_id}).to_list(1000)
+    }
     leave_types = await ensure_core_leave_types()
     emp_names = {e["id"]: f"{e['first_name']} {e['last_name']}" for e in employees}
     
@@ -3273,11 +3427,12 @@ async def get_employees(
 
 @api_router.get("/employees/{emp_id}", response_model=EmployeeResponse)
 async def get_employee(emp_id: str, current_user: dict = Depends(get_current_user)):
-    emp = await db.employees.find_one({"id": emp_id})
+    company_id = await get_current_company_id(current_user)
+    emp = await db.employees.find_one({"id": emp_id, "company_id": company_id})
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
     
-    dept = await db.departments.find_one({"id": emp["department_id"]})
+    dept = await db.departments.find_one({"id": emp["department_id"], "company_id": company_id})
     leave_types = await ensure_core_leave_types()
     leave_balance_summary = summarize_leave_balance(emp, leave_types)
     dept_name = dept["name"] if dept else None
@@ -3408,6 +3563,7 @@ async def update_my_employee_profile(data: EmployeeProfileUpdate, current_user: 
         emp_id = str(uuid.uuid4())
         new_employee = {
             "id": emp_id,
+            "company_id": await get_current_company_id(current_user),
             "user_id": current_user["id"],
             "employee_id": f"EMP{emp_id[:8].upper()}",
             "first_name": data.first_name or current_user.get("first_name", ""),
@@ -3442,11 +3598,13 @@ async def update_my_employee_profile(data: EmployeeProfileUpdate, current_user: 
 
 @api_router.put("/employees/{emp_id}", response_model=EmployeeResponse)
 async def update_employee(emp_id: str, emp_data: EmployeeUpdate, current_user: dict = Depends(require_manager)):
-    employee = await db.employees.find_one({"id": emp_id})
+    current_company_id = await get_current_company_id(current_user)
+    employee = await db.employees.find_one({"id": emp_id, "company_id": current_company_id})
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
 
     update_dict = emp_data.dict(exclude_unset=True, exclude={"temporary_password"})
+    company_id = employee.get("company_id") or current_company_id
 
     if update_dict.get("employee_id") and update_dict["employee_id"] != employee.get("employee_id"):
         duplicate_employee_id = await db.employees.find_one({
@@ -3470,6 +3628,15 @@ async def update_employee(emp_id: str, emp_data: EmployeeUpdate, current_user: d
 
     if "role" in update_dict and update_dict["role"] is not None:
         update_dict["role"] = normalize_employee_role(update_dict["role"])
+
+    if "department_id" in update_dict or "department_name" in update_dict:
+        resolved_department = await resolve_employee_department(
+            company_id=company_id,
+            department_id=update_dict.get("department_id") or employee.get("department_id"),
+            department_name=update_dict.get("department_name"),
+        )
+        update_dict["department_id"] = resolved_department["id"]
+        update_dict.pop("department_name", None)
 
     if "regular_start_time" in update_dict:
         update_dict["regular_start_time"] = normalize_time_string(update_dict["regular_start_time"])
@@ -3495,13 +3662,14 @@ async def update_employee(emp_id: str, emp_data: EmployeeUpdate, current_user: d
         last_name=merged["last_name"],
         role=merged.get("role", "employee"),
         temporary_password=emp_data.temporary_password,
+        company_id=company_id,
         existing_user_id=employee.get("user_id"),
     )
 
     update_dict["user_id"] = user_id
     update_dict["updated_at"] = datetime.utcnow()
 
-    await db.employees.update_one({"id": emp_id}, {"$set": update_dict})
+    await db.employees.update_one({"id": emp_id, "company_id": current_company_id}, {"$set": update_dict})
     await log_activity(
         current_user["id"],
         "employee_updated",
@@ -3516,7 +3684,8 @@ async def update_employee_leave_balance(
     payload: EmployeeLeaveBalanceUpdate,
     current_user: dict = Depends(require_admin)
 ):
-    employee = await db.employees.find_one({"id": emp_id})
+    company_id = await get_current_company_id(current_user)
+    employee = await db.employees.find_one({"id": emp_id, "company_id": company_id})
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
 
@@ -3530,7 +3699,7 @@ async def update_employee_leave_balance(
         updated_balance[leave_type_id] = max(0.0, float(balance_value))
 
     await db.employees.update_one(
-        {"id": emp_id},
+        {"id": emp_id, "company_id": company_id},
         {
             "$set": {
                 "leave_balance": updated_balance,
@@ -3543,9 +3712,10 @@ async def update_employee_leave_balance(
 
 @api_router.delete("/employees/{emp_id}")
 async def delete_employee(emp_id: str, current_user: dict = Depends(require_admin)):
-    emp = await db.employees.find_one({"id": emp_id})
+    company_id = await get_current_company_id(current_user)
+    emp = await db.employees.find_one({"id": emp_id, "company_id": company_id})
     await db.employees.update_one(
-        {"id": emp_id},
+        {"id": emp_id, "company_id": company_id},
         {"$set": {"status": "terminated", "updated_at": datetime.utcnow()}}
     )
     await log_activity(current_user["id"], "employee_terminated", f"Employee terminated: {emp_id}")
@@ -3617,6 +3787,7 @@ async def create_leave_request(lr: LeaveRequestCreate, current_user: dict = Depe
     leave_request = {
         "id": lr_id,
         "employee_id": employee["id"],
+        "company_id": employee.get("company_id"),
         "leave_type_id": lr.leave_type_id,
         "start_date": lr.start_date,
         "end_date": lr.end_date,
@@ -3653,7 +3824,8 @@ async def get_leave_requests(
     employee_id: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
 ):
-    query = {}
+    company_id = await get_current_company_id(current_user)
+    query = {"company_id": company_id}
     if status:
         query["status"] = status
     
@@ -3672,7 +3844,7 @@ async def get_leave_requests(
         if not manager_employee:
             return []
 
-        team_query: Dict[str, Any] = {"status": "active"}
+        team_query: Dict[str, Any] = {"status": "active", "company_id": company_id}
         if manager_employee.get("department_id"):
             team_query["department_id"] = manager_employee["department_id"]
 
@@ -3691,7 +3863,7 @@ async def get_leave_requests(
         query["employee_id"] = employee_id
     
     leave_requests = await db.leave_requests.find(query).sort("created_at", -1).to_list(1000)
-    employees = {e["id"]: f"{e['first_name']} {e['last_name']}" for e in await db.employees.find().to_list(1000)}
+    employees = {e["id"]: f"{e['first_name']} {e['last_name']}" for e in await db.employees.find({"company_id": company_id}).to_list(1000)}
     leave_types = {lt["id"]: lt["name"] for lt in await ensure_core_leave_types()}
     mirrored_time_off_ids = {
         lr.get("source_time_off_request_id")
@@ -3699,7 +3871,7 @@ async def get_leave_requests(
         if lr.get("source_time_off_request_id")
     }
 
-    time_off_query = {}
+    time_off_query = {"company_id": company_id} if company_id else {}
     if status:
         time_off_query["status"] = map_leave_status_to_time_off_status(status)
     if query.get("employee_id"):
@@ -3918,6 +4090,7 @@ async def clock_in(data: AttendanceClockIn, current_user: dict = Depends(get_cur
     attendance = {
         "id": att_id,
         "employee_id": employee["id"],
+        "company_id": employee.get("company_id"),
         "date": today,
         "clock_in": now,
         "clock_out": None,
@@ -3965,7 +4138,7 @@ async def clock_out(data: AttendanceClockOut, current_user: dict = Depends(get_c
             raise HTTPException(status_code=400, detail=f"Clock-out blocked: {message}")
     
     today = datetime.utcnow().strftime("%Y-%m-%d")
-    attendance = await db.attendance.find_one({"employee_id": employee["id"], "date": today})
+    attendance = await db.attendance.find_one({"employee_id": employee["id"], "date": today, "company_id": employee.get("company_id")})
     if not attendance:
         raise HTTPException(status_code=400, detail="No clock-in record found for today")
     if attendance.get("clock_out"):
@@ -4008,7 +4181,7 @@ async def get_today_attendance(current_user: dict = Depends(get_current_user)):
         return None
     
     today = datetime.utcnow().strftime("%Y-%m-%d")
-    attendance = await db.attendance.find_one({"employee_id": employee["id"], "date": today})
+    attendance = await db.attendance.find_one({"employee_id": employee["id"], "date": today, "company_id": employee.get("company_id")})
     
     if not attendance:
         return None
@@ -4022,7 +4195,8 @@ async def get_attendance(
     end_date: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
 ):
-    query = {}
+    company_id = await get_current_company_id(current_user)
+    query = {"company_id": company_id} if company_id else {}
     
     if current_user["role"] == "employee":
         employee = await db.employees.find_one({"user_id": current_user["id"]})
@@ -4062,8 +4236,8 @@ async def get_attendance(
             query["date"] = {"$lte": end_date}
     
     records = await db.attendance.find(query).sort("date", -1).to_list(1000)
-    employees = {e["id"]: f"{e['first_name']} {e['last_name']}" for e in await db.employees.find().to_list(1000)}
-    active_shift_query = {"status": {"$in": ["working", "on_break"]}}
+    employees = {e["id"]: f"{e['first_name']} {e['last_name']}" for e in await db.employees.find({"company_id": company_id}).to_list(1000)}
+    active_shift_query = {"status": {"$in": ["working", "on_break"]}, "company_id": company_id}
     if query.get("employee_id"):
         active_shift_query["employee_id"] = query["employee_id"]
     if start_date and end_date and start_date == end_date:
@@ -4132,6 +4306,7 @@ async def create_manual_attendance(data: AttendanceManualCreate, current_user: d
     attendance = {
         "id": att_id,
         "employee_id": data.employee_id,
+        "company_id": employee.get("company_id"),
         "date": data.date,
         "clock_in": clock_in,
         "clock_out": clock_out,
@@ -4202,7 +4377,8 @@ async def get_late_report(
 # ===== Payroll Routes =====
 @api_router.post("/payroll", response_model=PayrollResponse)
 async def create_payroll(pr: PayrollCreate, current_user: dict = Depends(require_admin)):
-    employee = await db.employees.find_one({"id": pr.employee_id})
+    company_id = await get_current_company_id(current_user)
+    employee = await db.employees.find_one({"id": pr.employee_id, "company_id": company_id})
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
     
@@ -4216,6 +4392,7 @@ async def create_payroll(pr: PayrollCreate, current_user: dict = Depends(require
     payroll = {
         "id": pr_id,
         "employee_id": pr.employee_id,
+        "company_id": company_id,
         "pay_period_start": pr.pay_period_start,
         "pay_period_end": pr.pay_period_end,
         "basic_salary": pr.basic_salary,
@@ -4265,7 +4442,8 @@ async def get_payroll(
     status: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
 ):
-    query = {}
+    company_id = await get_current_company_id(current_user)
+    query = {"company_id": company_id} if company_id else {}
     
     if current_user["role"] == "employee":
         employee = await db.employees.find_one({"user_id": current_user["id"]})
@@ -4278,8 +4456,8 @@ async def get_payroll(
         query["status"] = status
     
     payrolls = await db.payroll.find(query).sort("created_at", -1).to_list(1000)
-    employees = {e["id"]: e for e in await db.employees.find().to_list(1000)}
-    departments = {d["id"]: d["name"] for d in await db.departments.find().to_list(100)}
+    employees = {e["id"]: e for e in await db.employees.find({"company_id": company_id}).to_list(1000)}
+    departments = {d["id"]: d["name"] for d in await db.departments.find({"company_id": company_id}).to_list(100)}
     
     result = []
     for pr in payrolls:
@@ -4736,25 +4914,37 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
     now = datetime.utcnow()
     today = now.strftime("%Y-%m-%d")
     month_start = now.replace(day=1).strftime("%Y-%m-%d")
-    
-    total_employees = await db.employees.count_documents({})
-    active_employees = await db.employees.count_documents({"status": "active"})
-    
-    new_hires = await db.employees.count_documents({
-        "start_date": {"$gte": month_start},
-        "status": "active"
-    })
-    
-    employees_on_leave = await db.leave_requests.count_documents({
-        "status": "approved",
-        "start_date": {"$lte": today},
-        "end_date": {"$gte": today}
-    })
-    
-    pending_leave = await db.leave_requests.count_documents({"status": "pending"})
+    company_id = await get_current_company_id(current_user)
+
+    employee_base_query = {"company_id": company_id} if company_id else {}
+    active_employee_query = {**employee_base_query, "status": "active"}
+    leave_base_query = {"company_id": company_id} if company_id else {}
+    attendance_base_query = {"company_id": company_id} if company_id else {}
+    activity_base_query = {"company_id": company_id} if company_id else {}
+
+    total_employees, active_employees, new_hires, employees_on_leave, pending_leave, present_count, late_count, attendance_count, employees, departments, activities = await asyncio.gather(
+        db.employees.count_documents(employee_base_query),
+        db.employees.count_documents(active_employee_query),
+        db.employees.count_documents({
+            **active_employee_query,
+            "start_date": {"$gte": month_start},
+        }),
+        db.leave_requests.count_documents({
+            **leave_base_query,
+            "status": "approved",
+            "start_date": {"$lte": today},
+            "end_date": {"$gte": today},
+        }),
+        db.leave_requests.count_documents({**leave_base_query, "status": "pending"}),
+        db.attendance.count_documents({**attendance_base_query, "date": today, "status": "present"}),
+        db.attendance.count_documents({**attendance_base_query, "date": today, "status": "late"}),
+        db.attendance.count_documents({**attendance_base_query, "date": today}),
+        db.employees.find(active_employee_query).to_list(1000),
+        db.departments.find({"company_id": company_id}).to_list(1000),
+        db.activity_logs.find(activity_base_query).sort("created_at", -1).limit(10).to_list(10),
+    )
+
     pending_timesheets = 0
-    
-    employees = await db.employees.find({"status": "active"}).to_list(1000)
     upcoming_birthdays = []
     upcoming_anniversaries = []
     
@@ -4798,24 +4988,22 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
     upcoming_birthdays.sort(key=lambda x: x["days_until"])
     upcoming_anniversaries.sort(key=lambda x: x["days_until"])
     
-    departments = await db.departments.find().to_list(100)
     department_breakdown = []
     for dept in departments:
-        count = await db.employees.count_documents({"department_id": dept["id"], "status": "active"})
+        count = sum(1 for emp in employees if emp.get("department_id") == dept["id"])
         department_breakdown.append({
             "department_id": dept["id"],
             "name": dept["name"],
             "employee_count": count
         })
-    
+
     attendance_today = {
-        "present": await db.attendance.count_documents({"date": today, "status": "present"}),
-        "late": await db.attendance.count_documents({"date": today, "status": "late"}),
-        "absent": active_employees - await db.attendance.count_documents({"date": today}),
+        "present": present_count,
+        "late": late_count,
+        "absent": max(active_employees - attendance_count, 0),
         "on_leave": employees_on_leave
     }
-    
-    activities = await db.activity_logs.find().sort("created_at", -1).limit(10).to_list(10)
+
     recent_activities = [
         {
             "id": a["id"],
@@ -4845,30 +5033,51 @@ async def get_manager_dashboard(
     target_date: Optional[str] = None,
     current_user: dict = Depends(require_manager)
 ):
-    manager_employee = await db.employees.find_one({"user_id": current_user["id"]})
+    company_id = await get_current_company_id(current_user)
+    manager_employee = await db.employees.find_one({"user_id": current_user["id"], "company_id": company_id})
     if not manager_employee:
-        manager_employee = await db.employees.find_one({"email": current_user["email"]})
+        manager_employee = await db.employees.find_one({"email": current_user["email"], "company_id": company_id})
     if not manager_employee:
         raise HTTPException(status_code=404, detail="Manager employee profile not found")
 
     date_value = target_date or datetime.utcnow().strftime("%Y-%m-%d")
-    employee_query: Dict[str, Any] = {"status": "active"}
+    employee_query: Dict[str, Any] = {"status": "active", "company_id": company_id}
 
     if current_user["role"] == "manager":
         employee_query["department_id"] = manager_employee.get("department_id")
 
     employees = await db.employees.find(employee_query).to_list(500)
     employee_ids = [employee["id"] for employee in employees]
+    if not employee_ids:
+        return {
+            "date": date_value,
+            "summary": {
+                "total_employees": 0,
+                "working": 0,
+                "on_break": 0,
+                "clocked_out": 0,
+                "late": 0,
+                "pending_leave_requests": 0,
+            },
+            "employees": [],
+            "pending_leave_requests": [],
+        }
 
-    shifts = await db.shifts.find({"employee_id": {"$in": employee_ids}, "date": date_value}).to_list(500)
-    attendance_records = await db.attendance.find({"employee_id": {"$in": employee_ids}, "date": date_value}).to_list(500)
-    pending_leave_requests = await db.leave_requests.find({
-        "employee_id": {"$in": employee_ids},
-        "status": "pending",
-    }).sort("created_at", -1).to_list(100)
+    shifts, attendance_records, pending_leave_requests, departments = await asyncio.gather(
+        db.shifts.find({"employee_id": {"$in": employee_ids}, "date": date_value}).to_list(500),
+        db.attendance.find({"employee_id": {"$in": employee_ids}, "date": date_value, "company_id": company_id}).to_list(500),
+        db.leave_requests.find({
+            "employee_id": {"$in": employee_ids},
+            "company_id": company_id,
+            "status": "pending",
+        }).sort("created_at", -1).to_list(100),
+        db.departments.find({"company_id": company_id}).to_list(200),
+    )
 
     shift_by_employee = {shift["employee_id"]: shift for shift in shifts}
     attendance_by_employee = {record["employee_id"]: record for record in attendance_records}
+    employee_map = {employee["id"]: employee for employee in employees}
+    department_map = {department["id"]: department["name"] for department in departments}
 
     employee_rows = []
     late_count = 0
@@ -4914,11 +5123,10 @@ async def get_manager_dashboard(
             "assigned_work_location": employee.get("work_location"),
         })
 
-    departments = {department["id"]: department["name"] for department in await db.departments.find().to_list(100)}
     for row in employee_rows:
-        employee_doc = next((employee for employee in employees if employee["id"] == row["id"]), None)
+        employee_doc = employee_map.get(row["id"])
         if employee_doc:
-            row["department_name"] = departments.get(employee_doc.get("department_id"))
+            row["department_name"] = department_map.get(employee_doc.get("department_id"))
 
     leave_type_names = {leave_type["id"]: leave_type["name"] for leave_type in await ensure_core_leave_types()}
     leave_request_rows = [
@@ -5866,13 +6074,16 @@ async def get_notifications(
     current_user: dict = Depends(get_current_user)
 ):
     """Get notifications for the current user"""
-    query = {}
+    company_id = await get_current_company_id(current_user)
+    query = {"$and": []}
     
     # HR and admin see all notifications
     if current_user["role"] in ["super_admin", "hr_admin"]:
-        query = {"$or": [{"target_role": {"$in": ["all", "hr_admin", "super_admin"]}}, {"target_user_id": current_user["id"]}]}
+        query["$and"].append({"$or": [{"target_role": {"$in": ["all", "hr_admin", "super_admin"]}}, {"target_user_id": current_user["id"]}]})
     else:
-        query = {"$or": [{"target_role": "all"}, {"target_role": current_user["role"]}, {"target_user_id": current_user["id"]}]}
+        query["$and"].append({"$or": [{"target_role": "all"}, {"target_role": current_user["role"]}, {"target_user_id": current_user["id"]}]})
+
+    query["$and"].append({"$or": [{"company_id": company_id}, {"target_user_id": current_user["id"]}]})
     
     notifications = await db.notifications.find(query).sort("created_at", -1).limit(limit).to_list(limit)
     return [{k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in n.items() if k != "_id"} for n in notifications]
