@@ -14,6 +14,7 @@ const RAW_API_URL =
   'https://workpulse-hr.onrender.com';
 
 const API_URL = RAW_API_URL.replace(/\/+$/, '');
+const REQUEST_TIMEOUT_MS = 8000;
 
 // Global token setter to sync with store
 let globalTokenSetter: ((token: string | null) => void) | null = null;
@@ -38,6 +39,7 @@ interface RegisterData {
   first_name: string;
   last_name: string;
   role?: string;
+  company_name?: string;
   security_question: string;
   security_answer: string;
 }
@@ -111,6 +113,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await AsyncStorage.setItem('expo_push_token', expoPushToken);
   };
 
+  const verifyStoredToken = async (storedToken: string) => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(`${API_URL}/api/auth/me`, {
+        headers: {
+          Authorization: `Bearer ${storedToken}`,
+        },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        await logout();
+      }
+    } catch (e: any) {
+      if (e?.name !== 'AbortError') {
+        console.log('Token verification failed, keeping stored auth');
+      }
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+
   const loadStoredAuth = async () => {
     try {
       const storedToken = await AsyncStorage.getItem('auth_token');
@@ -125,26 +151,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (globalTokenSetter) {
           globalTokenSetter(storedToken);
         }
-
-        try {
-          const response = await fetch(`${API_URL}/api/auth/me`, {
-            headers: {
-              Authorization: `Bearer ${storedToken}`,
-            },
-          });
-
-          if (!response.ok) {
-            await logout();
-          }
-        } catch (e) {
-          console.log('Token verification failed, keeping stored auth');
-        }
+        setIsLoading(false);
+        verifyStoredToken(storedToken);
+        return;
       }
     } catch (error) {
       console.error('Error loading auth:', error);
-    } finally {
-      setIsLoading(false);
     }
+
+    setIsLoading(false);
   };
 
   const login = async (
@@ -152,15 +167,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     password: string,
     rememberMe: boolean = false
   ): Promise<User> => {
-    const response = await fetch(`${API_URL}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email,
-        password,
-        remember_me: rememberMe,
-      }),
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${API_URL}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          password,
+          remember_me: rememberMe,
+        }),
+      });
+    } catch (error: any) {
+      throw error;
+    }
 
     const raw = await response.text();
 

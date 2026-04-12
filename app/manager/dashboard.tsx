@@ -13,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/context/AuthContext';
 import AppIcon from '../../src/components/AppIcon';
 
@@ -22,6 +23,8 @@ const RAW_API_URL =
   'https://workpulse-hr.onrender.com';
 
 const API_URL = RAW_API_URL.replace(/\/+$/, '');
+const MANAGER_DASHBOARD_CACHE_KEY = 'manager_dashboard_cache_v1';
+const REQUEST_TIMEOUT_MS = 8000;
 
 type WorkforceStatus = 'working' | 'on_break' | 'clocked_out';
 
@@ -116,43 +119,67 @@ export default function ManagerDashboardScreen() {
 
   const apiRequest = useCallback(async (endpoint: string, method: string = 'GET', body?: any) => {
     const token = await getToken();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-    const response = await fetch(`${API_URL}${endpoint}`, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    });
-
-    const raw = await response.text();
-
-    let data: any = null;
     try {
-      data = raw ? JSON.parse(raw) : null;
-    } catch {
-      data = { detail: raw || `Request failed (${response.status})` };
-    }
+      const response = await fetch(`${API_URL}${endpoint}`, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+        signal: controller.signal,
+      });
 
-    if (!response.ok) {
-      throw new Error(
-        typeof data?.detail === 'string'
-          ? data.detail
-          : data?.message || `Request failed (${response.status})`
-      );
-    }
+      const raw = await response.text();
 
-    return data;
+      let data: any = null;
+      try {
+        data = raw ? JSON.parse(raw) : null;
+      } catch {
+        data = { detail: raw || `Request failed (${response.status})` };
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          typeof data?.detail === 'string'
+            ? data.detail
+            : data?.message || `Request failed (${response.status})`
+        );
+      }
+
+      return data;
+    } catch (error: any) {
+      if (error?.name === 'AbortError') {
+        throw new Error('Request timed out');
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }, [getToken]);
 
   const loadDashboard = useCallback(async () => {
+    let hadCachedData = false;
     try {
+      const cached = await AsyncStorage.getItem(MANAGER_DASHBOARD_CACHE_KEY);
+      if (cached) {
+        setDashboard(JSON.parse(cached));
+        setLoading(false);
+        hadCachedData = true;
+      }
+
       const data = await apiRequest(`/api/manager/dashboard?target_date=${reportDate}`);
-      setDashboard(data || emptyDashboard);
+      const nextDashboard = data || emptyDashboard;
+      setDashboard(nextDashboard);
+      await AsyncStorage.setItem(MANAGER_DASHBOARD_CACHE_KEY, JSON.stringify(nextDashboard));
     } catch (error: any) {
-      Alert.alert('Error', error.message || 'Failed to load manager dashboard');
+      if (!hadCachedData) {
+        Alert.alert('Error', error.message || 'Failed to load manager dashboard');
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -258,6 +285,23 @@ export default function ManagerDashboardScreen() {
           <SummaryCard label="On Break" value={dashboard.summary.on_break} color="#F59E0B" />
           <SummaryCard label="Late Today" value={dashboard.summary.late} color="#EF4444" />
         </View>
+
+        <TouchableOpacity
+          style={styles.scheduleHeroCard}
+          activeOpacity={0.88}
+          onPress={() => router.push('/manager/schedules')}
+        >
+          <View style={styles.scheduleHeroIconWrap}>
+            <AppIcon name="schedule" size={22} color="#2563EB" />
+          </View>
+          <View style={styles.scheduleHeroTextWrap}>
+            <Text style={styles.scheduleHeroTitle}>Build Team Schedules</Text>
+            <Text style={styles.scheduleHeroSub}>
+              Assign one employee or push a weekly pattern to your whole department.
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color="#2563EB" />
+        </TouchableOpacity>
 
         <View style={styles.sectionCard}>
           <View style={styles.sectionHeader}>
@@ -450,6 +494,39 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontSize: 13,
     color: '#64748B',
+  },
+  scheduleHeroCard: {
+    backgroundColor: '#EFF6FF',
+    borderRadius: 20,
+    padding: 18,
+    marginBottom: 18,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  scheduleHeroIconWrap: {
+    width: 46,
+    height: 46,
+    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scheduleHeroTextWrap: {
+    flex: 1,
+  },
+  scheduleHeroTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  scheduleHeroSub: {
+    marginTop: 4,
+    fontSize: 13,
+    color: '#475569',
+    lineHeight: 19,
   },
   sectionCard: {
     backgroundColor: '#FFFFFF',

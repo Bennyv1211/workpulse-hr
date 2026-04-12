@@ -20,6 +20,8 @@ const RAW_API_URL =
   'https://workpulse-hr.onrender.com';
 
 const API_URL = RAW_API_URL.replace(/\/+$/, '');
+const DASHBOARD_CACHE_KEY = 'employee_dashboard_cache_v1';
+const REQUEST_TIMEOUT_MS = 8000;
 
 type ShiftStatus = 'clocked_out' | 'working' | 'on_break';
 
@@ -101,34 +103,46 @@ export default function EmployeeDashboardScreen() {
 
   const apiRequest = async (endpoint: string) => {
     const token = await getToken();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-    const response = await fetch(`${API_URL}${endpoint}`, {
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-    });
-
-    const raw = await response.text();
-
-    let data: any = null;
     try {
-      data = raw ? JSON.parse(raw) : null;
-    } catch {
-      data = { detail: raw || `Request failed (${response.status})` };
+      const response = await fetch(`${API_URL}${endpoint}`, {
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        signal: controller.signal,
+      });
+
+      const raw = await response.text();
+
+      let data: any = null;
+      try {
+        data = raw ? JSON.parse(raw) : null;
+      } catch {
+        data = { detail: raw || `Request failed (${response.status})` };
+      }
+
+      if (!response.ok) {
+        const message =
+          typeof data?.detail === 'string'
+            ? data.detail
+            : data?.message || `Request failed (${response.status})`;
+
+        throw new Error(message);
+      }
+
+      return data;
+    } catch (error: any) {
+      if (error?.name === 'AbortError') {
+        throw new Error('Request timed out');
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    if (!response.ok) {
-      const message =
-        typeof data?.detail === 'string'
-          ? data.detail
-          : data?.message || `Request failed (${response.status})`;
-
-      throw new Error(message);
-    }
-
-    return data;
   };
 
   const getStartOfWeek = () => {
@@ -165,7 +179,15 @@ export default function EmployeeDashboardScreen() {
   };
 
   const loadDashboard = useCallback(async () => {
+    let hadCachedData = false;
     try {
+      const cached = await AsyncStorage.getItem(DASHBOARD_CACHE_KEY);
+      if (cached) {
+        setDashboard(JSON.parse(cached));
+        setLoading(false);
+        hadCachedData = true;
+      }
+
       const startDate = formatISODate(getStartOfWeek());
       const endDate = formatISODate(getEndOfWeek());
 
@@ -256,7 +278,7 @@ export default function EmployeeDashboardScreen() {
         };
       }
 
-      setDashboard({
+      const nextDashboard = {
         status: currentStatus,
         hoursThisWeek: Number(hoursThisWeek.toFixed(2)),
         leaveBalanceHours: Number(leaveBalanceHours.toFixed(2)),
@@ -276,9 +298,14 @@ export default function EmployeeDashboardScreen() {
         ),
         leaveRequests,
         clockInLocal,
-      });
+      };
+
+      setDashboard(nextDashboard);
+      await AsyncStorage.setItem(DASHBOARD_CACHE_KEY, JSON.stringify(nextDashboard));
     } catch (error: any) {
-      Alert.alert('Error', error.message || 'Failed to load dashboard');
+      if (!hadCachedData) {
+        Alert.alert('Error', error.message || 'Failed to load dashboard');
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -297,6 +324,21 @@ export default function EmployeeDashboardScreen() {
   const maxHours = useMemo(() => {
     return Math.max(...dashboard.weeklyHours.map((d) => d.hours), 1);
   }, [dashboard.weeklyHours]);
+
+  const weeklyGoalHours = 40;
+  const weeklyGoalProgress = useMemo(
+    () => Math.min(dashboard.hoursThisWeek / weeklyGoalHours, 1),
+    [dashboard.hoursThisWeek]
+  );
+  const totalRequestCount = useMemo(
+    () =>
+      dashboard.pendingLeaveCount + dashboard.approvedLeaveCount + dashboard.rejectedLeaveCount,
+    [dashboard.approvedLeaveCount, dashboard.pendingLeaveCount, dashboard.rejectedLeaveCount]
+  );
+  const annualVsSickMax = useMemo(
+    () => Math.max(dashboard.annualLeave.hours, dashboard.sickLeave.hours, 1),
+    [dashboard.annualLeave.hours, dashboard.sickLeave.hours]
+  );
 
   const statusConfig = useMemo(() => {
     if (dashboard.status === 'working') {
@@ -436,6 +478,112 @@ export default function EmployeeDashboardScreen() {
           <Text style={styles.totalLeaveValue}>
             {dashboard.leaveBalanceHours.toFixed(1)}h
           </Text>
+        </View>
+
+        <View style={styles.spotlightCard}>
+          <View style={styles.spotlightHeader}>
+            <View>
+              <Text style={styles.spotlightTitle}>Week Momentum</Text>
+              <Text style={styles.spotlightSub}>
+                {dashboard.hoursThisWeek.toFixed(1)} of {weeklyGoalHours} target hours logged
+              </Text>
+            </View>
+            <Text style={styles.spotlightPercent}>
+              {Math.round(weeklyGoalProgress * 100)}%
+            </Text>
+          </View>
+          <View style={styles.spotlightTrack}>
+            <View style={[styles.spotlightFill, { width: `${weeklyGoalProgress * 100}%` }]} />
+          </View>
+        </View>
+
+        <View style={styles.dualInsightRow}>
+          <View style={styles.insightCard}>
+            <Text style={styles.insightTitle}>Request Snapshot</Text>
+            <Text style={styles.insightSub}>{totalRequestCount} requests tracked</Text>
+
+            <View style={styles.segmentBar}>
+              <View
+                style={[
+                  styles.segmentSlice,
+                  styles.segmentPending,
+                  { flex: Math.max(dashboard.pendingLeaveCount, 0.4) },
+                ]}
+              />
+              <View
+                style={[
+                  styles.segmentSlice,
+                  styles.segmentApproved,
+                  { flex: Math.max(dashboard.approvedLeaveCount, 0.4) },
+                ]}
+              />
+              <View
+                style={[
+                  styles.segmentSlice,
+                  styles.segmentRejected,
+                  { flex: Math.max(dashboard.rejectedLeaveCount, 0.4) },
+                ]}
+              />
+            </View>
+
+            <View style={styles.legendRow}>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendDot, styles.segmentPending]} />
+                <Text style={styles.legendText}>Pending {dashboard.pendingLeaveCount}</Text>
+              </View>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendDot, styles.segmentApproved]} />
+                <Text style={styles.legendText}>Approved {dashboard.approvedLeaveCount}</Text>
+              </View>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendDot, styles.segmentRejected]} />
+                <Text style={styles.legendText}>Rejected {dashboard.rejectedLeaveCount}</Text>
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.insightCard}>
+            <Text style={styles.insightTitle}>Leave Balance Mix</Text>
+            <Text style={styles.insightSub}>Your tracked balance split</Text>
+
+            <View style={styles.balanceCompareWrap}>
+              <View style={styles.balanceCompareColumn}>
+                <View style={styles.balanceCompareTrack}>
+                  <View
+                    style={[
+                      styles.balanceCompareFill,
+                      styles.balanceCompareFillAnnual,
+                      {
+                        height: `${(dashboard.annualLeave.hours / annualVsSickMax) * 100}%`,
+                      },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.balanceCompareValue}>
+                  {dashboard.annualLeave.hours.toFixed(1)}h
+                </Text>
+                <Text style={styles.balanceCompareLabel}>Annual</Text>
+              </View>
+
+              <View style={styles.balanceCompareColumn}>
+                <View style={styles.balanceCompareTrack}>
+                  <View
+                    style={[
+                      styles.balanceCompareFill,
+                      styles.balanceCompareFillSick,
+                      {
+                        height: `${(dashboard.sickLeave.hours / annualVsSickMax) * 100}%`,
+                      },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.balanceCompareValue}>
+                  {dashboard.sickLeave.hours.toFixed(1)}h
+                </Text>
+                <Text style={styles.balanceCompareLabel}>Sick</Text>
+              </View>
+            </View>
+          </View>
         </View>
 
         <View style={styles.sectionCard}>
@@ -658,6 +806,149 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: '800',
     color: '#2563EB',
+  },
+  spotlightCard: {
+    backgroundColor: '#0F172A',
+    borderRadius: 24,
+    padding: 18,
+    marginBottom: 18,
+  },
+  spotlightHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+    alignItems: 'flex-start',
+  },
+  spotlightTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  spotlightSub: {
+    marginTop: 4,
+    fontSize: 13,
+    color: '#BFDBFE',
+  },
+  spotlightPercent: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#38BDF8',
+  },
+  spotlightTrack: {
+    height: 12,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    marginTop: 16,
+    overflow: 'hidden',
+  },
+  spotlightFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: '#38BDF8',
+  },
+  dualInsightRow: {
+    gap: 12,
+    marginBottom: 18,
+  },
+  insightCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 18,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  insightTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  insightSub: {
+    marginTop: 4,
+    fontSize: 13,
+    color: '#64748B',
+  },
+  segmentBar: {
+    marginTop: 16,
+    height: 14,
+    borderRadius: 999,
+    overflow: 'hidden',
+    flexDirection: 'row',
+    backgroundColor: '#E2E8F0',
+  },
+  segmentSlice: {
+    height: '100%',
+  },
+  segmentPending: {
+    backgroundColor: '#F59E0B',
+  },
+  segmentApproved: {
+    backgroundColor: '#10B981',
+  },
+  segmentRejected: {
+    backgroundColor: '#EF4444',
+  },
+  legendRow: {
+    marginTop: 14,
+    gap: 8,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  legendDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 999,
+  },
+  legendText: {
+    fontSize: 13,
+    color: '#475569',
+    fontWeight: '600',
+  },
+  balanceCompareWrap: {
+    marginTop: 18,
+    flexDirection: 'row',
+    justifyContent: 'space-evenly',
+    alignItems: 'flex-end',
+    minHeight: 180,
+  },
+  balanceCompareColumn: {
+    alignItems: 'center',
+  },
+  balanceCompareTrack: {
+    width: 44,
+    height: 116,
+    borderRadius: 999,
+    backgroundColor: '#E2E8F0',
+    justifyContent: 'flex-end',
+    overflow: 'hidden',
+  },
+  balanceCompareFill: {
+    width: '100%',
+    borderRadius: 999,
+    minHeight: 8,
+  },
+  balanceCompareFillAnnual: {
+    backgroundColor: '#8B5CF6',
+  },
+  balanceCompareFillSick: {
+    backgroundColor: '#EF4444',
+  },
+  balanceCompareValue: {
+    marginTop: 10,
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  balanceCompareLabel: {
+    marginTop: 4,
+    fontSize: 12,
+    color: '#64748B',
+    fontWeight: '700',
   },
   sectionHeader: {
     marginBottom: 14,

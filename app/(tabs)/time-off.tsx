@@ -10,13 +10,11 @@ import {
   Modal,
   TextInput,
   Alert,
-  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
-import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import NetInfo from '@react-native-community/netinfo';
 import AppIcon from '../../src/components/AppIcon';
 
@@ -31,6 +29,7 @@ const CACHED_TIME_OFF_REQUESTS_KEY = 'cached_time_off_requests_v1';
 const CACHED_LEAVE_TYPES_KEY = 'cached_leave_types_v1';
 const CACHED_LEAVE_BALANCE_KEY = 'cached_leave_balance_v1';
 const REQUEST_TIMEOUT_MS = 8000;
+const CALENDAR_WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 interface LeaveTypeOption {
   id: string;
@@ -70,6 +69,12 @@ interface OfflineTimeOffAction {
   created_at: string;
 }
 
+type CalendarCell = {
+  key: string;
+  date: Date;
+  inMonth: boolean;
+};
+
 export default function TimeOffScreen() {
   const [requests, setRequests] = useState<TimeOffRequest[]>([]);
   const [leaveTypes, setLeaveTypes] = useState<LeaveTypeOption[]>([]);
@@ -98,6 +103,11 @@ export default function TimeOffScreen() {
   const [showDatePickerModal, setShowDatePickerModal] = useState(false);
   const [activePicker, setActivePicker] = useState<'start' | 'end' | null>(null);
   const [pickerDraftDate, setPickerDraftDate] = useState<Date>(todayDate);
+  const [calendarMonth, setCalendarMonth] = useState<Date>(() => {
+    const seeded = new Date(todayDate);
+    seeded.setDate(1);
+    return seeded;
+  });
 
   function formatDateForApi(date: Date) {
     const year = date.getFullYear();
@@ -111,6 +121,50 @@ export default function TimeOffScreen() {
       month: 'short',
       day: 'numeric',
       year: 'numeric',
+    });
+  }
+
+  function formatMonthYear(date: Date) {
+    return date.toLocaleDateString('en-US', {
+      month: 'long',
+      year: 'numeric',
+    });
+  }
+
+  function startOfMonth(date: Date) {
+    return new Date(date.getFullYear(), date.getMonth(), 1);
+  }
+
+  function addMonths(date: Date, amount: number) {
+    return new Date(date.getFullYear(), date.getMonth() + amount, 1);
+  }
+
+  function stripTime(date: Date) {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  }
+
+  function isSameDay(left: Date, right: Date) {
+    return (
+      left.getFullYear() === right.getFullYear() &&
+      left.getMonth() === right.getMonth() &&
+      left.getDate() === right.getDate()
+    );
+  }
+
+  function buildCalendarDays(month: Date) {
+    const firstDay = startOfMonth(month);
+    const firstWeekday = firstDay.getDay();
+    const gridStart = new Date(firstDay);
+    gridStart.setDate(firstDay.getDate() - firstWeekday);
+
+    return Array.from({ length: 42 }, (_, index) => {
+      const current = new Date(gridStart);
+      current.setDate(gridStart.getDate() + index);
+      return {
+        key: `${current.getFullYear()}-${current.getMonth()}-${current.getDate()}`,
+        date: current,
+        inMonth: current.getMonth() === month.getMonth(),
+      } satisfies CalendarCell;
     });
   }
 
@@ -396,6 +450,12 @@ export default function TimeOffScreen() {
     setShowDatePickerModal(false);
     setActivePicker(null);
     setPickerDraftDate(newToday);
+    setCalendarMonth(startOfMonth(newToday));
+  };
+
+  const closeRequestModal = () => {
+    setShowModal(false);
+    resetForm();
   };
 
   const handleSubmit = async () => {
@@ -453,8 +513,7 @@ export default function TimeOffScreen() {
         const nextRequests = [offlineRequest, ...requests];
         setRequests(nextRequests);
         await AsyncStorage.setItem(CACHED_TIME_OFF_REQUESTS_KEY, JSON.stringify(nextRequests));
-        setShowModal(false);
-        resetForm();
+        closeRequestModal();
         Alert.alert(
           'Saved Offline',
           'Your leave request was saved on this device and will sync automatically when internet returns.'
@@ -464,8 +523,7 @@ export default function TimeOffScreen() {
 
       await apiRequest('/api/time-off', 'POST', payload);
 
-      setShowModal(false);
-      resetForm();
+      closeRequestModal();
       await loadScreenData();
       Alert.alert('Request Submitted', 'Your time off request has been submitted for approval.');
     } catch (error: any) {
@@ -503,27 +561,12 @@ export default function TimeOffScreen() {
     ]);
   };
 
-  const handlePickerChange = (event: DateTimePickerEvent, selectedDate?: Date) => {
-    if (event.type === 'dismissed') {
-      closePicker();
-      return;
-    }
-
-    if (!selectedDate) {
-      return;
-    }
-
-    setPickerDraftDate(selectedDate);
-
-    if (Platform.OS === 'android') {
-      applyPickerDate(selectedDate);
-    }
-  };
-
   const openPicker = (type: 'start' | 'end') => {
     setShowLeaveTypeModal(false);
     setActivePicker(type);
-    setPickerDraftDate(type === 'start' ? startDateObj : endDateObj);
+    const nextDate = type === 'start' ? startDateObj : endDateObj;
+    setPickerDraftDate(nextDate);
+    setCalendarMonth(startOfMonth(nextDate));
     setShowDatePickerModal(true);
   };
 
@@ -556,8 +599,16 @@ export default function TimeOffScreen() {
     closePicker();
   };
 
-  const confirmPicker = () => {
-    applyPickerDate(pickerDraftDate);
+  const minimumSelectableDate = activePicker === 'end' ? stripTime(startDateObj) : stripTime(todayDate);
+  const calendarDays = buildCalendarDays(calendarMonth);
+
+  const selectCalendarDate = (selectedDate: Date) => {
+    if (stripTime(selectedDate) < minimumSelectableDate) {
+      return;
+    }
+
+    setPickerDraftDate(selectedDate);
+    applyPickerDate(selectedDate);
   };
 
   const getStatusColor = (status: string) => {
@@ -738,10 +789,7 @@ export default function TimeOffScreen() {
         <SafeAreaView style={styles.modalContainer}>
           <View style={styles.modalHeader}>
             <TouchableOpacity
-              onPress={() => {
-                setShowModal(false);
-                resetForm();
-              }}
+              onPress={closeRequestModal}
             >
               <Ionicons name="close" size={24} color="#64748B" />
             </TouchableOpacity>
@@ -806,17 +854,24 @@ export default function TimeOffScreen() {
               />
             </View>
 
-            <TouchableOpacity
-              style={[styles.submitButton, submitting && styles.submitButtonDisabled]}
-              onPress={handleSubmit}
-              disabled={submitting}
-            >
-              {submitting ? (
-                <ActivityIndicator color="#FFFFFF" />
-              ) : (
-                <Text style={styles.submitButtonText}>Submit Request</Text>
-              )}
-            </TouchableOpacity>
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={styles.backButtonSecondary} onPress={closeRequestModal}>
+                <Ionicons name="arrow-back-outline" size={18} color="#475569" />
+                <Text style={styles.backButtonSecondaryText}>Back</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.submitButton, submitting && styles.submitButtonDisabled]}
+                onPress={handleSubmit}
+                disabled={submitting}
+              >
+                {submitting ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.submitButtonText}>Submit Request</Text>
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
 
         </SafeAreaView>
@@ -833,21 +888,72 @@ export default function TimeOffScreen() {
             <Text style={styles.datePickerModalTitle}>
               {activePicker === 'start' ? 'Choose Start Date' : 'Choose End Date'}
             </Text>
+            <Text style={styles.datePickerModalSub}>
+              Tap a day to use it for this request
+            </Text>
 
-            <DateTimePicker
-              value={pickerDraftDate}
-              mode="date"
-              display={Platform.OS === 'ios' ? 'spinner' : 'calendar'}
-              onChange={handlePickerChange}
-              minimumDate={activePicker === 'end' ? startDateObj : new Date()}
-            />
+            <View style={styles.calendarNavRow}>
+              <TouchableOpacity
+                style={styles.calendarNavButton}
+                onPress={() => setCalendarMonth((current) => addMonths(current, -1))}
+              >
+                <Ionicons name="chevron-back" size={18} color="#334155" />
+              </TouchableOpacity>
+
+              <Text style={styles.calendarMonthLabel}>{formatMonthYear(calendarMonth)}</Text>
+
+              <TouchableOpacity
+                style={styles.calendarNavButton}
+                onPress={() => setCalendarMonth((current) => addMonths(current, 1))}
+              >
+                <Ionicons name="chevron-forward" size={18} color="#334155" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.calendarWeekHeader}>
+              {CALENDAR_WEEKDAY_LABELS.map((label) => (
+                <Text key={label} style={styles.calendarWeekLabel}>
+                  {label}
+                </Text>
+              ))}
+            </View>
+
+            <View style={styles.calendarGrid}>
+              {calendarDays.map((cell) => {
+                const cellDate = stripTime(cell.date);
+                const disabled = cellDate < minimumSelectableDate;
+                const selected = isSameDay(cell.date, pickerDraftDate);
+
+                return (
+                  <TouchableOpacity
+                    key={cell.key}
+                    style={[
+                      styles.calendarCell,
+                      selected && styles.calendarCellSelected,
+                      !cell.inMonth && styles.calendarCellOutsideMonth,
+                      disabled && styles.calendarCellDisabled,
+                    ]}
+                    disabled={disabled}
+                    onPress={() => selectCalendarDate(cell.date)}
+                  >
+                    <Text
+                      style={[
+                        styles.calendarCellText,
+                        !cell.inMonth && styles.calendarCellTextMuted,
+                        selected && styles.calendarCellTextSelected,
+                        disabled && styles.calendarCellTextDisabled,
+                      ]}
+                    >
+                      {cell.date.getDate()}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
 
             <View style={styles.iosPickerActions}>
               <TouchableOpacity style={styles.iosPickerButtonSecondary} onPress={closePicker}>
                 <Text style={styles.iosPickerButtonSecondaryText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.iosPickerButtonPrimary} onPress={confirmPicker}>
-                <Text style={styles.iosPickerButtonPrimaryText}>Done</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1189,12 +1295,35 @@ const styles = StyleSheet.create({
     minHeight: 100,
     textAlignVertical: 'top',
   },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 20,
+  },
+  backButtonSecondary: {
+    flex: 1,
+    minHeight: 56,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#FFFFFF',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+  },
+  backButtonSecondaryText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#475569',
+  },
   submitButton: {
+    flex: 1,
     backgroundColor: '#3B82F6',
     borderRadius: 14,
     paddingVertical: 18,
     alignItems: 'center',
-    marginTop: 20,
+    justifyContent: 'center',
   },
   submitButtonDisabled: {
     opacity: 0.7,
@@ -1254,7 +1383,80 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#1E293B',
     textAlign: 'center',
+  },
+  datePickerModalSub: {
+    marginTop: 6,
+    marginBottom: 14,
+    textAlign: 'center',
+    fontSize: 13,
+    color: '#64748B',
+  },
+  calendarNavRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  calendarNavButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: '#F8FAFC',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  calendarMonthLabel: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  calendarWeekHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     marginBottom: 8,
+  },
+  calendarWeekLabel: {
+    width: '14.28%',
+    textAlign: 'center',
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#64748B',
+  },
+  calendarGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: 12,
+  },
+  calendarCell: {
+    width: '14.28%',
+    aspectRatio: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 14,
+    marginBottom: 6,
+  },
+  calendarCellSelected: {
+    backgroundColor: '#3B82F6',
+  },
+  calendarCellOutsideMonth: {
+    opacity: 0.45,
+  },
+  calendarCellDisabled: {
+    opacity: 0.2,
+  },
+  calendarCellText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1E293B',
+  },
+  calendarCellTextMuted: {
+    color: '#94A3B8',
+  },
+  calendarCellTextSelected: {
+    color: '#FFFFFF',
+  },
+  calendarCellTextDisabled: {
+    color: '#CBD5E1',
   },
   leaveTypeModalOverlay: {
     flex: 1,

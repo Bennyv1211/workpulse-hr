@@ -19,6 +19,7 @@ import { useAuth } from '../../src/context/AuthContext';
 export default function RegisterScreen() {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
+  const [companyName, setCompanyName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -49,6 +50,11 @@ export default function RegisterScreen() {
       return;
     }
 
+    if ((selectedRole === 'super_admin' || selectedRole === 'hr_admin') && !companyName.trim()) {
+      Alert.alert('Error', 'Please enter the company or workspace name.');
+      return;
+    }
+
     if (password !== confirmPassword) {
       Alert.alert('Error', 'Passwords do not match');
       return;
@@ -67,6 +73,7 @@ export default function RegisterScreen() {
   email: email.trim(),
   password,
   role: selectedRole,
+  company_name: companyName.trim() || undefined,
   security_question: securityQuestion,
   security_answer: securityAnswer.trim(),
 });
@@ -133,6 +140,21 @@ if (selectedRole === 'manager') {
                     autoCapitalize="words"
                   />
                 </View>
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Company / Workspace Name</Text>
+              <View style={styles.inputContainer}>
+                <Ionicons name="business-outline" size={20} color="#64748B" style={styles.inputIcon} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Enter company name"
+                  placeholderTextColor="#94A3B8"
+                  value={companyName}
+                  onChangeText={setCompanyName}
+                  autoCapitalize="words"
+                />
               </View>
             </View>
 
