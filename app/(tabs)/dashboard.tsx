@@ -7,11 +7,13 @@ import {
   RefreshControl,
   ActivityIndicator,
   Alert,
+  AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import { useFocusEffect } from 'expo-router';
 import { useAuth } from '../../src/context/AuthContext';
 
 const RAW_API_URL =
@@ -314,6 +316,28 @@ export default function EmployeeDashboardScreen() {
 
   useEffect(() => {
     loadDashboard();
+  }, [loadDashboard]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadDashboard();
+
+      const intervalId = setInterval(() => {
+        loadDashboard();
+      }, 30000);
+
+      return () => clearInterval(intervalId);
+    }, [loadDashboard])
+  );
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        loadDashboard();
+      }
+    });
+
+    return () => subscription.remove();
   }, [loadDashboard]);
 
   const onRefresh = useCallback(async () => {

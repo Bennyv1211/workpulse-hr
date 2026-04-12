@@ -290,6 +290,16 @@ export default function ManagerSchedulesScreen() {
     }
   };
 
+  const loadScheduleIntoEditor = (row: ScheduleRow) => {
+    const dayIndex = weekDays.findIndex((item) => item.iso === row.date);
+    setMode('employee');
+    setSelectedEmployeeId(row.employee_id);
+    setSelectedDayIndex(dayIndex >= 0 ? dayIndex : 0);
+    setStartTime(row.start_time || '09:00');
+    setEndTime(row.end_time || '17:00');
+    setNotes(row.notes || '');
+  };
+
   const renderPickerOptions = () => {
     const list =
       pickerMode === 'employee'
@@ -459,13 +469,14 @@ export default function ManagerSchedulesScreen() {
                   <Text style={styles.groupHours}>{group.total.toFixed(1)}h</Text>
                 </View>
                 {group.items.map((item) => (
-                  <View key={item.id} style={styles.groupRow}>
+                  <TouchableOpacity key={item.id} style={styles.groupRow} activeOpacity={0.82} onPress={() => loadScheduleIntoEditor(item)}>
                     <View>
                       <Text style={styles.groupDate}>{new Date(`${item.date}T00:00:00`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</Text>
                       {!!item.notes && <Text style={styles.groupNote}>{item.notes}</Text>}
+                      <Text style={styles.groupEditHint}>Tap to edit this shift</Text>
                     </View>
                     <Text style={styles.groupTime}>{item.start_time || 'Off'}{item.end_time ? ` - ${item.end_time}` : ''}</Text>
-                  </View>
+                  </TouchableOpacity>
                 ))}
               </View>
             ))
@@ -544,6 +555,7 @@ const styles = StyleSheet.create({
   groupRow: { borderTopWidth: 1, borderTopColor: '#F1F5F9', paddingVertical: 10, flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
   groupDate: { fontSize: 14, fontWeight: '700', color: '#334155' },
   groupNote: { marginTop: 4, fontSize: 12, color: '#64748B' },
+  groupEditHint: { marginTop: 4, fontSize: 11, color: '#94A3B8', fontWeight: '700' },
   groupTime: { fontSize: 14, fontWeight: '700', color: '#1D4ED8' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.35)', justifyContent: 'flex-end' },
   modalCard: { maxHeight: '72%', backgroundColor: '#FFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingBottom: 24 },

@@ -32,6 +32,8 @@ type PayrollItem = {
   gross_pay: number;
   deductions: number;
   tax: number;
+  insurance_deduction?: number;
+  pension_deduction?: number;
   benefits_deduction?: number;
   bonus?: number;
   net_pay: number;
@@ -41,6 +43,8 @@ type PayrollItem = {
 const API_URL =
   Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL ||
   'https://workpulse-hr.onrender.com';
+const PAYSTUB_PAYROLL_CACHE_KEY = 'hr_paystubs_payroll_cache_v1';
+const REQUEST_TIMEOUT_MS = 10000;
 
 export default function HRPaystubsScreen() {
   const [items, setItems] = useState<PayrollItem[]>([]);
@@ -64,15 +68,36 @@ export default function HRPaystubsScreen() {
   };
 
   const loadPayroll = async () => {
+    let hadCachedData = false;
     try {
       setLoading(true);
 
+      const cached = await AsyncStorage.getItem(PAYSTUB_PAYROLL_CACHE_KEY);
+      if (cached) {
+        setItems(JSON.parse(cached));
+        setLoading(false);
+        hadCachedData = true;
+      }
+
       const token = await getToken();
-      const response = await fetch(`${API_URL}/api/payroll`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      let response: Response;
+      try {
+        response = await fetch(`${API_URL}/api/payroll`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          signal: controller.signal,
+        });
+      } catch (error: any) {
+        if (error?.name === 'AbortError') {
+          throw new Error('Payroll request timed out');
+        }
+        throw error;
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       const text = await response.text();
       const data = text ? JSON.parse(text) : [];
@@ -81,9 +106,13 @@ export default function HRPaystubsScreen() {
         throw new Error(data?.detail || 'Failed to load payroll');
       }
 
-      setItems(Array.isArray(data) ? data : []);
+      const nextItems = Array.isArray(data) ? data : [];
+      setItems(nextItems);
+      await AsyncStorage.setItem(PAYSTUB_PAYROLL_CACHE_KEY, JSON.stringify(nextItems));
     } catch (error: any) {
-      Alert.alert('Error', error.message || 'Failed to load payroll records');
+      if (!hadCachedData) {
+        Alert.alert('Error', error.message || 'Failed to load payroll records');
+      }
     } finally {
       setLoading(false);
     }
@@ -116,6 +145,8 @@ export default function HRPaystubsScreen() {
         gross_pay: item.gross_pay,
         deductions: item.deductions,
         tax: item.tax,
+        insurance_deduction: item.insurance_deduction || 0,
+        pension_deduction: item.pension_deduction || 0,
         benefits_deduction: item.benefits_deduction || 0,
         bonus: item.bonus || 0,
         net_pay: item.net_pay,
@@ -314,6 +345,18 @@ export default function HRPaystubsScreen() {
                 <View style={styles.row}>
                   <Text style={styles.label}>Deductions</Text>
                   <Text style={styles.value}>{currency(selected.deductions)}</Text>
+                </View>
+                <View style={styles.row}>
+                  <Text style={styles.label}>Insurance</Text>
+                  <Text style={styles.value}>{currency(selected.insurance_deduction)}</Text>
+                </View>
+                <View style={styles.row}>
+                  <Text style={styles.label}>Pension</Text>
+                  <Text style={styles.value}>{currency(selected.pension_deduction)}</Text>
+                </View>
+                <View style={styles.row}>
+                  <Text style={styles.label}>Benefits</Text>
+                  <Text style={styles.value}>{currency(selected.benefits_deduction)}</Text>
                 </View>
                 <View style={styles.row}>
                   <Text style={styles.label}>Net Pay</Text>

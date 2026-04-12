@@ -73,6 +73,8 @@ interface PayrollPreview {
   bonus: number;
   deductions: number;
   tax: number;
+  insuranceDeduction: number;
+  pensionDeduction: number;
   benefitsDeduction: number;
   grossPay: number;
   netPay: number;
@@ -86,6 +88,8 @@ type DraftMap = Record<
     bonus: string;
     deductions: string;
     tax: string;
+    insurance: string;
+    pension: string;
     benefits: string;
     overtimeRate: string;
   }
@@ -260,6 +264,8 @@ export default function HRPayrollScreen() {
         bonus: '0',
         deductions: '0',
         tax: '0',
+        insurance: '0',
+        pension: '0',
         benefits: '0',
         overtimeRate: '1.5',
       };
@@ -268,11 +274,14 @@ export default function HRPayrollScreen() {
       const bonus = Number(defaultDraft.bonus || 0);
       const deductions = Number(defaultDraft.deductions || 0);
       const tax = Number(defaultDraft.tax || 0);
+      const insuranceDeduction = Number(defaultDraft.insurance || 0);
+      const pensionDeduction = Number(defaultDraft.pension || 0);
       const benefitsDeduction = Number(defaultDraft.benefits || 0);
 
       const overtimePay = overtimeHours * baseRate * overtimeRate;
       const grossPay = basicSalary + overtimePay + bonus;
-      const netPay = grossPay - deductions - tax - benefitsDeduction;
+      const netPay =
+        grossPay - deductions - tax - insuranceDeduction - pensionDeduction - benefitsDeduction;
 
       return {
         employee: emp,
@@ -285,6 +294,8 @@ export default function HRPayrollScreen() {
         bonus: Number(bonus.toFixed(2)),
         deductions: Number(deductions.toFixed(2)),
         tax: Number(tax.toFixed(2)),
+        insuranceDeduction: Number(insuranceDeduction.toFixed(2)),
+        pensionDeduction: Number(pensionDeduction.toFixed(2)),
         benefitsDeduction: Number(benefitsDeduction.toFixed(2)),
         grossPay: Number(grossPay.toFixed(2)),
         netPay: Number(netPay.toFixed(2)),
@@ -302,6 +313,8 @@ export default function HRPayrollScreen() {
           bonus: '0',
           deductions: '0',
           tax: '0',
+          insurance: '0',
+          pension: '0',
           benefits: '0',
           overtimeRate: '1.5',
         },
@@ -325,6 +338,8 @@ export default function HRPayrollScreen() {
           bonus: '0',
           deductions: '0',
           tax: '0',
+          insurance: '0',
+          pension: '0',
           benefits: '0',
           overtimeRate: '1.5',
         }),
@@ -363,6 +378,8 @@ export default function HRPayrollScreen() {
         bonus: selectedPreview.bonus,
         deductions: selectedPreview.deductions,
         tax: selectedPreview.tax,
+        insurance_deduction: selectedPreview.insuranceDeduction,
+        pension_deduction: selectedPreview.pensionDeduction,
         benefits_deduction: selectedPreview.benefitsDeduction,
         notes: `Generated from attendance for ${periodStart} to ${periodEnd}`,
       });
@@ -409,6 +426,8 @@ export default function HRPayrollScreen() {
         bonus: item.bonus,
         deductions: item.deductions,
         tax: item.tax,
+        insurance_deduction: item.insuranceDeduction,
+        pension_deduction: item.pensionDeduction,
         benefits_deduction: item.benefitsDeduction,
         gross_pay: item.grossPay,
         net_pay: item.netPay,
@@ -690,6 +709,14 @@ export default function HRPayrollScreen() {
                     value={selectedPreview.overtimeHours.toFixed(2)}
                   />
                   <SummaryRow
+                    label="Insurance Deduction"
+                    value={formatMoney(selectedPreview.insuranceDeduction)}
+                  />
+                  <SummaryRow
+                    label="Pension Deduction"
+                    value={formatMoney(selectedPreview.pensionDeduction)}
+                  />
+                  <SummaryRow
                     label="Vacation Balance"
                     value={`${selectedPreview.vacationBalanceHours.toFixed(1)}h`}
                   />
@@ -721,6 +748,18 @@ export default function HRPayrollScreen() {
                   label="Tax"
                   value={drafts[selectedEmployee.id]?.tax ?? '0'}
                   onChangeText={(v) => updateDraft(selectedEmployee.id, 'tax', v)}
+                />
+
+                <Field
+                  label="Insurance Deduction"
+                  value={drafts[selectedEmployee.id]?.insurance ?? '0'}
+                  onChangeText={(v) => updateDraft(selectedEmployee.id, 'insurance', v)}
+                />
+
+                <Field
+                  label="Pension Deduction"
+                  value={drafts[selectedEmployee.id]?.pension ?? '0'}
+                  onChangeText={(v) => updateDraft(selectedEmployee.id, 'pension', v)}
                 />
 
                 <Field

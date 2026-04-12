@@ -8,9 +8,10 @@ import {
   RefreshControl,
   ActivityIndicator,
   Alert,
+  AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
@@ -188,6 +189,28 @@ export default function ManagerDashboardScreen() {
 
   useEffect(() => {
     loadDashboard();
+  }, [loadDashboard]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadDashboard();
+
+      const intervalId = setInterval(() => {
+        loadDashboard();
+      }, 30000);
+
+      return () => clearInterval(intervalId);
+    }, [loadDashboard])
+  );
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        loadDashboard();
+      }
+    });
+
+    return () => subscription.remove();
   }, [loadDashboard]);
 
   const onRefresh = useCallback(async () => {

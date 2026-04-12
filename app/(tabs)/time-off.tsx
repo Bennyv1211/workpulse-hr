@@ -521,7 +521,29 @@ export default function TimeOffScreen() {
         return;
       }
 
-      await apiRequest('/api/time-off', 'POST', payload);
+      const authToken = await AsyncStorage.getItem('auth_token');
+      const token = authToken || (await AsyncStorage.getItem('token'));
+      const response = await fetch(`${API_URL}/api/time-off`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const raw = await response.text();
+      let data: any = null;
+      try {
+        data = raw ? JSON.parse(raw) : null;
+      } catch {
+        data = { detail: raw || 'Request failed' };
+      }
+
+      if (!response.ok) {
+        throw new Error(data?.detail || 'Failed to submit leave request');
+      }
 
       closeRequestModal();
       await loadScreenData();
