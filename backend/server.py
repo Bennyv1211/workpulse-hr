@@ -179,6 +179,8 @@ def make_pdf_bytes(
     bonus: float = 0,
     tax: float = 0,
     deductions: float = 0,
+    insurance_deduction: float = 0,
+    pension_deduction: float = 0,
     benefits_deduction: float = 0,
     department_name: Optional[str] = None,
     job_title: Optional[str] = None,
@@ -273,18 +275,21 @@ def make_pdf_bytes(
     )
     draw_column_row(earnings_left, earnings_right, height - 386, "Gross Pay", draw_money(gross_pay), bold=True)
 
+    total_deduction_amount = tax + deductions + insurance_deduction + pension_deduction + benefits_deduction
     draw_column_row(deductions_left, deductions_right, height - 290, "Tax", draw_money(tax))
-    draw_column_row(deductions_left, deductions_right, height - 314, "Deductions", draw_money(deductions))
-    draw_column_row(deductions_left, deductions_right, height - 338, "Benefits", draw_money(benefits_deduction))
+    draw_column_row(deductions_left, deductions_right, height - 314, "Other Deductions", draw_money(deductions))
+    draw_column_row(deductions_left, deductions_right, height - 338, "Insurance", draw_money(insurance_deduction))
+    draw_column_row(deductions_left, deductions_right, height - 362, "Pension", draw_money(pension_deduction))
+    draw_column_row(deductions_left, deductions_right, height - 386, "Benefits", draw_money(benefits_deduction))
     draw_column_row(
         deductions_left,
         deductions_right,
-        height - 362,
+        height - 410,
         "Total Deductions",
-        draw_money(tax + deductions + benefits_deduction),
+        draw_money(total_deduction_amount),
         bold=True,
     )
-    draw_column_row(deductions_left, deductions_right, height - 386, "Take Home Pay", draw_money(net_pay), bold=True)
+    draw_column_row(deductions_left, deductions_right, height - 434, "Take Home Pay", draw_money(net_pay), bold=True)
 
     c.setFillColor(colors.HexColor("#DBEAFE"))
     c.roundRect(45, height - 530, width - 90, 54, 18, stroke=0, fill=1)
@@ -1430,6 +1435,8 @@ class PayrollCreate(BaseModel):
     bonus: float = 0
     deductions: float = 0
     tax: float = 0
+    insurance_deduction: float = 0
+    pension_deduction: float = 0
     benefits_deduction: float = 0
     notes: Optional[str] = None
 
@@ -1450,6 +1457,8 @@ class PayrollResponse(BaseModel):
     gross_pay: float
     deductions: float
     tax: float
+    insurance_deduction: float = 0
+    pension_deduction: float = 0
     benefits_deduction: float
     net_pay: float
     status: str = "pending"
@@ -1464,6 +1473,8 @@ class PaystubCreate(BaseModel):
     gross_pay: float
     deductions: float = 0
     tax: float = 0
+    insurance_deduction: float = 0
+    pension_deduction: float = 0
     benefits_deduction: float = 0
     bonus: float = 0
     net_pay: float
@@ -2663,6 +2674,8 @@ async def upsert_paystub(payload: PaystubCreate, current_user: dict) -> dict:
         bonus=payload.bonus,
         tax=payload.tax,
         deductions=payload.deductions,
+        insurance_deduction=payload.insurance_deduction,
+        pension_deduction=payload.pension_deduction,
         benefits_deduction=payload.benefits_deduction,
         department_name=department_name,
         job_title=employee.get("job_title"),
@@ -2689,6 +2702,8 @@ async def upsert_paystub(payload: PaystubCreate, current_user: dict) -> dict:
         "gross_pay": payload.gross_pay,
         "deductions": payload.deductions,
         "tax": payload.tax,
+        "insurance_deduction": payload.insurance_deduction,
+        "pension_deduction": payload.pension_deduction,
         "benefits_deduction": payload.benefits_deduction,
         "bonus": payload.bonus,
         "net_pay": payload.net_pay,
@@ -2813,6 +2828,8 @@ async def send_paystubs(payload: PaystubBulkSend, current_user: dict = Depends(r
                     gross_pay=payroll["gross_pay"],
                     deductions=payroll.get("deductions", 0),
                     tax=payroll.get("tax", 0),
+                    insurance_deduction=payroll.get("insurance_deduction", 0),
+                    pension_deduction=payroll.get("pension_deduction", 0),
                     benefits_deduction=payroll.get("benefits_deduction", 0),
                     bonus=payroll.get("bonus", 0),
                     net_pay=payroll["net_pay"],
@@ -4390,7 +4407,7 @@ async def create_payroll(pr: PayrollCreate, current_user: dict = Depends(require
     
     overtime_pay = pr.overtime_hours * (pr.basic_salary / 160) * pr.overtime_rate
     gross_pay = pr.basic_salary + overtime_pay + pr.bonus
-    net_pay = gross_pay - pr.deductions - pr.tax - pr.benefits_deduction
+    net_pay = gross_pay - pr.deductions - pr.tax - pr.insurance_deduction - pr.pension_deduction - pr.benefits_deduction
     
     pr_id = str(uuid.uuid4())
     payroll = {
@@ -4407,6 +4424,8 @@ async def create_payroll(pr: PayrollCreate, current_user: dict = Depends(require
         "gross_pay": gross_pay,
         "deductions": pr.deductions,
         "tax": pr.tax,
+        "insurance_deduction": pr.insurance_deduction,
+        "pension_deduction": pr.pension_deduction,
         "benefits_deduction": pr.benefits_deduction,
         "net_pay": net_pay,
         "status": "pending",
@@ -4433,6 +4452,8 @@ async def create_payroll(pr: PayrollCreate, current_user: dict = Depends(require
         gross_pay=gross_pay,
         deductions=pr.deductions,
         tax=pr.tax,
+        insurance_deduction=pr.insurance_deduction,
+        pension_deduction=pr.pension_deduction,
         benefits_deduction=pr.benefits_deduction,
         net_pay=net_pay,
         status="pending",
@@ -4483,6 +4504,8 @@ async def get_payroll(
             gross_pay=pr["gross_pay"],
             deductions=pr["deductions"],
             tax=pr["tax"],
+            insurance_deduction=pr.get("insurance_deduction", 0),
+            pension_deduction=pr.get("pension_deduction", 0),
             benefits_deduction=pr["benefits_deduction"],
             net_pay=pr["net_pay"],
             status=pr["status"],
@@ -4517,6 +4540,8 @@ async def get_payroll_by_id(pr_id: str, current_user: dict = Depends(get_current
         gross_pay=pr["gross_pay"],
         deductions=pr["deductions"],
         tax=pr["tax"],
+        insurance_deduction=pr.get("insurance_deduction", 0),
+        pension_deduction=pr.get("pension_deduction", 0),
         benefits_deduction=pr["benefits_deduction"],
         net_pay=pr["net_pay"],
         status=pr["status"],
@@ -4805,7 +4830,7 @@ async def export_payroll(
     
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Employee", "Employee ID", "Period Start", "Period End", "Basic Salary", "Overtime Pay", "Bonus", "Gross Pay", "Tax", "Deductions", "Net Pay", "Status"])
+    writer.writerow(["Employee", "Employee ID", "Period Start", "Period End", "Basic Salary", "Overtime Pay", "Bonus", "Gross Pay", "Tax", "Other Deductions", "Insurance", "Pension", "Benefits", "Total Deductions", "Net Pay", "Status"])
     
     for r in records:
         emp = employees.get(r["employee_id"], {})
@@ -4819,7 +4844,11 @@ async def export_payroll(
             r["bonus"],
             r["gross_pay"],
             r["tax"],
-            r["deductions"] + r["benefits_deduction"],
+            r["deductions"],
+            r.get("insurance_deduction", 0),
+            r.get("pension_deduction", 0),
+            r["benefits_deduction"],
+            r["deductions"] + r.get("insurance_deduction", 0) + r.get("pension_deduction", 0) + r["benefits_deduction"],
             r["net_pay"],
             r["status"]
         ])
