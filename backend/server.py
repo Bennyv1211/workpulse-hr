@@ -886,6 +886,7 @@ class UserCreate(BaseModel):
     first_name: str
     last_name: str
     role: str = "employee"
+    company_name: Optional[str] = None
     security_question: str
     security_answer: str
 
@@ -1944,11 +1945,14 @@ async def register(user_data: UserCreate):
     user_id = str(uuid.uuid4())
     company_id = None
     if user_data.role in ["super_admin", "hr_admin", "hr"]:
+        company_name = (user_data.company_name or "").strip()
+        if not company_name:
+            raise HTTPException(status_code=400, detail="Company name is required for HR registration")
         company_id = str(uuid.uuid4())
         now = datetime.utcnow()
         await db.companies.insert_one({
             "id": company_id,
-            "name": f"{user_data.first_name}'s Workspace",
+            "name": company_name,
             "owner_user_id": user_id,
             "created_at": now,
             "updated_at": now,

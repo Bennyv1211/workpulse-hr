@@ -9,6 +9,7 @@ export default function Signup() {
   const [form, setForm] = useState({
     first_name: '',
     last_name: '',
+    company_name: '',
     email: '',
     password: '',
     confirmPassword: '',
@@ -115,6 +116,14 @@ export default function Signup() {
                 </div>
               </label>
             </div>
+
+            <label className="block">
+              <span className="block text-sm font-medium text-gray-700 mb-2">Company Name</span>
+              <div className="relative">
+                <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <input className="input pl-10" value={form.company_name} onChange={handleChange('company_name')} placeholder="Emplora Ltd" required />
+              </div>
+            </label>
 
             <label className="block">
               <span className="block text-sm font-medium text-gray-700 mb-2">Work Email</span>
