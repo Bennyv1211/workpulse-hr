@@ -23,6 +23,10 @@ from math import radians, cos, sin, asin, sqrt
 import asyncio
 from urllib import request as urllib_request, error as urllib_error
 from zoneinfo import ZoneInfo
+import smtplib
+import ssl
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.lib.units import inch
@@ -90,6 +94,171 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+def get_mail_settings() -> dict:
+    smtp_host = os.environ.get("SMTP_HOST", "").strip()
+    smtp_port = int(os.environ.get("SMTP_PORT", "465") or "465")
+    smtp_username = os.environ.get("SMTP_USERNAME", "").strip()
+    smtp_password = os.environ.get("SMTP_PASSWORD", "").strip()
+    from_email = os.environ.get("SMTP_FROM_EMAIL", smtp_username or "info@emplora.org").strip()
+    from_name = os.environ.get("SMTP_FROM_NAME", "Emplora").strip() or "Emplora"
+    use_ssl = str(os.environ.get("SMTP_USE_SSL", "true")).strip().lower() not in {"0", "false", "no"}
+    use_starttls = str(os.environ.get("SMTP_USE_STARTTLS", "false")).strip().lower() in {"1", "true", "yes"}
+    return {
+        "host": smtp_host,
+        "port": smtp_port,
+        "username": smtp_username,
+        "password": smtp_password,
+        "from_email": from_email,
+        "from_name": from_name,
+        "use_ssl": use_ssl,
+        "use_starttls": use_starttls,
+    }
+
+def email_delivery_enabled() -> bool:
+    settings = get_mail_settings()
+    return bool(settings["host"] and settings["username"] and settings["password"] and settings["from_email"])
+
+def build_hr_welcome_email(first_name: str, company_name: str) -> Dict[str, str]:
+    web_base_url = os.environ.get("WEB_APP_URL", "https://www.emplora.org").rstrip("/")
+    login_url = os.environ.get("WEB_LOGIN_URL", f"{web_base_url}/login").strip()
+    support_email = os.environ.get("SUPPORT_EMAIL", "info@emplora.org").strip()
+    mobile_note = os.environ.get(
+        "MOBILE_APP_NOTE",
+        "Employees and managers can use the Emplora mobile app after you create their accounts from inside your HR workspace.",
+    ).strip()
+
+    subject = f"Welcome to Emplora, {company_name}"
+    text_body = f"""Hi {first_name},
+
+Welcome to Emplora. Your HR workspace for {company_name} is ready.
+
+Sign in here:
+{login_url}
+
+What you can do inside Emplora:
+- Add employees and managers
+- Set pay rates and leave balances
+- Build schedules and send them to employees
+- Review attendance, late arrivals, and leave requests
+- Run payroll and send paystubs
+- Export backups and reports
+
+Mobile app note:
+{mobile_note}
+
+A good first setup path:
+1. Sign in to your HR dashboard
+2. Add your departments and first employees
+3. Set leave balances, pay details, and regular hours
+4. Review schedules, attendance, payroll, and paystubs
+
+If you need help, reply to {support_email}.
+
+Welcome aboard,
+The Emplora Team
+"""
+
+    html_body = f"""
+    <html>
+      <body style="margin:0;padding:0;background:#f8fafc;font-family:Arial,sans-serif;color:#0f172a;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:24px 0;">
+          <tr>
+            <td align="center">
+              <table role="presentation" width="640" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:20px;overflow:hidden;border:1px solid #e2e8f0;">
+                <tr>
+                  <td style="background:linear-gradient(135deg,#0f172a 0%,#1d4ed8 100%);padding:28px 32px;color:#ffffff;">
+                    <div style="font-size:28px;font-weight:700;letter-spacing:-0.02em;">Welcome to Emplora</div>
+                    <div style="margin-top:10px;font-size:16px;line-height:1.6;color:#dbeafe;">
+                      Your HR workspace for <strong style="color:#ffffff;">{company_name}</strong> is ready to go.
+                    </div>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:32px;">
+                    <p style="margin:0 0 16px;font-size:16px;line-height:1.7;">Hi {first_name},</p>
+                    <p style="margin:0 0 18px;font-size:16px;line-height:1.7;">
+                      Thanks for creating your Emplora HR account. You can now manage your company workspace from one place and get your team set up quickly.
+                    </p>
+                    <div style="margin:26px 0;">
+                      <a href="{login_url}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:14px 24px;border-radius:12px;font-weight:700;">
+                        Sign In to Your Dashboard
+                      </a>
+                    </div>
+                    <div style="margin:0 0 22px;font-size:15px;line-height:1.7;color:#334155;">
+                      Here’s what you can do right away:
+                    </div>
+                    <ul style="margin:0 0 24px 20px;padding:0;color:#334155;font-size:15px;line-height:1.8;">
+                      <li>Add employees and managers</li>
+                      <li>Set pay rates, deductions, and leave balances</li>
+                      <li>Create schedules and send them to employees</li>
+                      <li>Review attendance, lateness, and leave requests</li>
+                      <li>Run payroll and publish branded paystubs</li>
+                      <li>Export reports and backups for safekeeping</li>
+                    </ul>
+                    <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:14px;padding:18px 20px;margin:0 0 24px;">
+                      <div style="font-weight:700;font-size:15px;color:#1d4ed8;margin-bottom:8px;">Mobile app note</div>
+                      <div style="font-size:14px;line-height:1.7;color:#334155;">{mobile_note}</div>
+                    </div>
+                    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:18px 20px;">
+                      <div style="font-weight:700;font-size:15px;margin-bottom:8px;">Recommended first steps</div>
+                      <ol style="margin:0 0 0 18px;padding:0;color:#334155;font-size:14px;line-height:1.8;">
+                        <li>Sign in to your HR dashboard</li>
+                        <li>Add your departments and first employees</li>
+                        <li>Set regular hours, pay details, and leave balances</li>
+                        <li>Start using schedules, attendance, payroll, and paystubs</li>
+                      </ol>
+                    </div>
+                    <p style="margin:24px 0 0;font-size:14px;line-height:1.7;color:#475569;">
+                      Need help? Reply to <a href="mailto:{support_email}" style="color:#2563eb;text-decoration:none;">{support_email}</a>.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </body>
+    </html>
+    """
+
+    return {"subject": subject, "text": text_body, "html": html_body}
+
+def send_email_message(to_email: str, subject: str, text_body: str, html_body: Optional[str] = None) -> None:
+    settings = get_mail_settings()
+    if not email_delivery_enabled():
+        raise RuntimeError("Email delivery is not configured")
+
+    message = MIMEMultipart("alternative")
+    message["Subject"] = subject
+    message["From"] = f"{settings['from_name']} <{settings['from_email']}>"
+    message["To"] = to_email
+    message.attach(MIMEText(text_body, "plain", "utf-8"))
+    if html_body:
+        message.attach(MIMEText(html_body, "html", "utf-8"))
+
+    if settings["use_ssl"]:
+        with smtplib.SMTP_SSL(settings["host"], settings["port"], context=ssl.create_default_context()) as server:
+            server.login(settings["username"], settings["password"])
+            server.sendmail(settings["from_email"], [to_email], message.as_string())
+        return
+
+    with smtplib.SMTP(settings["host"], settings["port"]) as server:
+        server.ehlo()
+        if settings["use_starttls"]:
+            server.starttls(context=ssl.create_default_context())
+            server.ehlo()
+        server.login(settings["username"], settings["password"])
+        server.sendmail(settings["from_email"], [to_email], message.as_string())
+
+def send_hr_welcome_email(recipient_email: str, first_name: str, company_name: str) -> None:
+    email_payload = build_hr_welcome_email(first_name=first_name, company_name=company_name)
+    send_email_message(
+        to_email=recipient_email,
+        subject=email_payload["subject"],
+        text_body=email_payload["text"],
+        html_body=email_payload["html"],
+    )
 
 def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Calculate the distance between two points on Earth in meters"""
@@ -311,6 +480,250 @@ def make_pdf_bytes(
     pdf = buffer.getvalue()
     buffer.close()
     return pdf
+
+
+def make_payroll_review_pdf(review: "PayrollReviewResponse") -> bytes:
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=letter)
+    width, height = letter
+
+    logo_candidates = [
+        ROOT_DIR.parent / "frontend" / "assets" / "images" / "icon.png",
+        ROOT_DIR / "icon.png",
+    ]
+    logo_path = next((path for path in logo_candidates if path.exists()), None)
+
+    def draw_money(value: float) -> str:
+        return f"${float(value or 0):,.2f}"
+
+    c.setStrokeColor(colors.HexColor("#D9E2F0"))
+    c.setFillColor(colors.HexColor("#0F172A"))
+    c.setLineWidth(1)
+
+    if logo_path:
+        try:
+            c.drawImage(ImageReader(str(logo_path)), 48, height - 84, width=36, height=36, mask="auto")
+        except Exception:
+            pass
+
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(94, height - 56, "Emplora Payroll Review")
+    c.setFont("Helvetica", 10)
+    c.setFillColor(colors.HexColor("#64748B"))
+    c.drawString(94, height - 72, "Payroll run summary and budget estimate")
+
+    c.setFillColor(colors.HexColor("#2563EB"))
+    c.roundRect(width - 220, height - 94, 165, 44, 14, stroke=0, fill=1)
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 10.5)
+    c.drawCentredString(width - 137.5, height - 69, f"{review.pay_period_start} to {review.pay_period_end}")
+
+    c.setFillColor(colors.white)
+    c.roundRect(45, height - 190, width - 90, 92, 18, stroke=1, fill=1)
+    c.setFillColor(colors.HexColor("#0F172A"))
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(62, height - 126, "Payroll Budget Needed")
+    c.setFont("Helvetica-Bold", 24)
+    c.drawString(62, height - 156, draw_money(review.total_budget))
+
+    c.setFont("Helvetica", 10)
+    c.setFillColor(colors.HexColor("#475569"))
+    c.drawString(300, height - 126, f"Employees: {review.employee_count}")
+    c.drawString(300, height - 144, f"Total hours: {review.total_hours:.2f}")
+    c.drawString(300, height - 162, f"Gross pay: {draw_money(review.total_gross)}")
+    c.drawString(300, height - 180, f"Total deductions: {draw_money(review.total_deductions)}")
+
+    y = height - 230
+    c.setFillColor(colors.HexColor("#F8FAFC"))
+    c.roundRect(45, y - 24, width - 90, 24, 8, stroke=0, fill=1)
+    c.setFillColor(colors.HexColor("#334155"))
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(56, y - 14, "Employee")
+    c.drawString(245, y - 14, "Hours")
+    c.drawString(310, y - 14, "Gross")
+    c.drawString(390, y - 14, "Deductions")
+    c.drawRightString(width - 58, y - 14, "Net")
+
+    y -= 40
+    c.setFont("Helvetica", 9.5)
+    max_rows = 14
+    for row in review.rows[:max_rows]:
+        c.setFillColor(colors.HexColor("#0F172A"))
+        c.drawString(56, y, row.employee_name[:28])
+        c.setFillColor(colors.HexColor("#475569"))
+        c.drawString(245, y, f"{row.hours_worked:.2f}")
+        c.drawString(310, y, draw_money(row.gross_pay))
+        c.drawString(390, y, draw_money(row.total_deductions))
+        c.drawRightString(width - 58, y, draw_money(row.net_pay))
+        y -= 20
+
+    if len(review.rows) > max_rows:
+        c.setFillColor(colors.HexColor("#64748B"))
+        c.setFont("Helvetica-Oblique", 9)
+        c.drawString(56, y - 6, f"+ {len(review.rows) - max_rows} more employee rows in this payroll run")
+
+    c.setFillColor(colors.HexColor("#94A3B8"))
+    c.line(50, 44, width - 50, 44)
+    c.setFillColor(colors.HexColor("#64748B"))
+    c.setFont("Helvetica-Oblique", 9)
+    c.drawString(50, 28, "Generated by Emplora payroll review")
+    c.drawRightString(width - 50, 28, f"Prepared {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
+
+    c.showPage()
+    c.save()
+    pdf = buffer.getvalue()
+    buffer.close()
+    return pdf
+
+
+async def build_payroll_review(company_id: str, pay_period_start: str, pay_period_end: str) -> "PayrollReviewResponse":
+    employees = await db.employees.find({"company_id": company_id, "status": {"$ne": "archived"}}).to_list(2000)
+    departments = {
+        department["id"]: department["name"]
+        for department in await db.departments.find({"company_id": company_id}).to_list(500)
+    }
+
+    attendance_records = await db.attendance.find(
+        {
+            "company_id": company_id,
+            "date": {"$gte": pay_period_start, "$lte": pay_period_end},
+        }
+    ).to_list(10000)
+
+    attendance_by_employee: Dict[str, List[dict]] = {}
+    for record in attendance_records:
+        attendance_by_employee.setdefault(record["employee_id"], []).append(record)
+
+    rows: List[PayrollReviewRow] = []
+    total_budget = 0.0
+    total_gross = 0.0
+    total_net = 0.0
+    total_hours = 0.0
+    total_tax = 0.0
+    total_deductions = 0.0
+
+    for employee in employees:
+        records = attendance_by_employee.get(employee["id"], [])
+        worked_hours = round(sum(float(record.get("total_hours") or 0) for record in records), 2)
+
+        pay_type = (employee.get("pay_type") or "hourly").lower()
+        hourly_rate = float(employee.get("hourly_rate") or 0)
+        annual_salary = float(employee.get("salary") or 0)
+        base_rate = hourly_rate if pay_type == "hourly" else (annual_salary / 160 if annual_salary else 0)
+        overtime_hours = round(max(0.0, worked_hours - 160), 2)
+        overtime_rate = 1.5
+        basic_salary = round(worked_hours * base_rate, 2)
+        overtime_pay = round(overtime_hours * base_rate * overtime_rate, 2)
+        bonus = 0.0
+        deductions = 0.0
+        tax = 0.0
+        insurance_deduction = 0.0
+        pension_deduction = 0.0
+        benefits_deduction = 0.0
+        gross_pay = round(basic_salary + overtime_pay + bonus, 2)
+        total_deduction_amount = round(
+            deductions + tax + insurance_deduction + pension_deduction + benefits_deduction,
+            2,
+        )
+        net_pay = round(gross_pay - total_deduction_amount, 2)
+
+        if worked_hours <= 0 and gross_pay <= 0:
+            continue
+
+        row = PayrollReviewRow(
+            employee_id=employee["id"],
+            employee_name=f"{employee.get('first_name', '')} {employee.get('last_name', '')}".strip() or "Unknown Employee",
+            employee_code=employee.get("employee_id"),
+            department_name=departments.get(employee.get("department_id")),
+            job_title=employee.get("job_title"),
+            hours_worked=worked_hours,
+            base_rate=round(base_rate, 2),
+            basic_salary=basic_salary,
+            overtime_hours=overtime_hours,
+            overtime_rate=overtime_rate,
+            overtime_pay=overtime_pay,
+            bonus=bonus,
+            deductions=deductions,
+            tax=tax,
+            insurance_deduction=insurance_deduction,
+            pension_deduction=pension_deduction,
+            benefits_deduction=benefits_deduction,
+            gross_pay=gross_pay,
+            total_deductions=total_deduction_amount,
+            net_pay=net_pay,
+        )
+        rows.append(row)
+
+        total_budget += net_pay
+        total_gross += gross_pay
+        total_net += net_pay
+        total_hours += worked_hours
+        total_tax += tax
+        total_deductions += total_deduction_amount
+
+    rows.sort(key=lambda row: row.employee_name.lower())
+
+    return PayrollReviewResponse(
+        pay_period_start=pay_period_start,
+        pay_period_end=pay_period_end,
+        total_budget=round(total_budget, 2),
+        total_gross=round(total_gross, 2),
+        total_net=round(total_net, 2),
+        total_hours=round(total_hours, 2),
+        total_tax=round(total_tax, 2),
+        total_deductions=round(total_deductions, 2),
+        employee_count=len(rows),
+        rows=rows,
+    )
+
+
+async def upsert_payroll_record_from_review(
+    row: "PayrollReviewRow",
+    pay_period_start: str,
+    pay_period_end: str,
+    company_id: str,
+) -> dict:
+    existing = await db.payroll.find_one(
+        {
+            "company_id": company_id,
+            "employee_id": row.employee_id,
+            "pay_period_start": pay_period_start,
+            "pay_period_end": pay_period_end,
+        }
+    )
+
+    payroll_doc = {
+        "employee_id": row.employee_id,
+        "company_id": company_id,
+        "pay_period_start": pay_period_start,
+        "pay_period_end": pay_period_end,
+        "basic_salary": row.basic_salary,
+        "overtime_hours": row.overtime_hours,
+        "overtime_rate": row.overtime_rate,
+        "overtime_pay": row.overtime_pay,
+        "bonus": row.bonus,
+        "gross_pay": row.gross_pay,
+        "deductions": row.deductions,
+        "tax": row.tax,
+        "insurance_deduction": row.insurance_deduction,
+        "pension_deduction": row.pension_deduction,
+        "benefits_deduction": row.benefits_deduction,
+        "net_pay": row.net_pay,
+        "status": "pending",
+        "notes": f"Payroll run generated for {pay_period_start} to {pay_period_end}",
+        "updated_at": datetime.utcnow(),
+    }
+
+    if existing:
+        await db.payroll.update_one({"id": existing["id"]}, {"$set": payroll_doc})
+        saved = await db.payroll.find_one({"id": existing["id"]})
+    else:
+        payroll_doc["id"] = str(uuid.uuid4())
+        payroll_doc["created_at"] = datetime.utcnow()
+        await db.payroll.insert_one(payroll_doc)
+        saved = payroll_doc
+
+    return saved
 
 
 async def seed_notification(title: str, message: str, target_role: str = "all", target_user_id: Optional[str] = None):
@@ -1465,6 +1878,45 @@ class PayrollResponse(BaseModel):
     notes: Optional[str] = None
     created_at: datetime
 
+class PayrollReviewRequest(BaseModel):
+    pay_period_start: str
+    pay_period_end: str
+    send_paystubs: bool = False
+
+class PayrollReviewRow(BaseModel):
+    employee_id: str
+    employee_name: str
+    employee_code: Optional[str] = None
+    department_name: Optional[str] = None
+    job_title: Optional[str] = None
+    hours_worked: float
+    base_rate: float
+    basic_salary: float
+    overtime_hours: float
+    overtime_rate: float
+    overtime_pay: float
+    bonus: float = 0
+    deductions: float = 0
+    tax: float = 0
+    insurance_deduction: float = 0
+    pension_deduction: float = 0
+    benefits_deduction: float = 0
+    gross_pay: float
+    total_deductions: float
+    net_pay: float
+
+class PayrollReviewResponse(BaseModel):
+    pay_period_start: str
+    pay_period_end: str
+    total_budget: float
+    total_gross: float
+    total_net: float
+    total_hours: float
+    total_tax: float
+    total_deductions: float
+    employee_count: int
+    rows: List[PayrollReviewRow]
+
 class PaystubCreate(BaseModel):
     employee_id: str
     payroll_id: Optional[str] = None
@@ -1948,13 +2400,14 @@ async def sync_shift_clock_out_to_attendance(employee: dict, local_time: Optiona
 
 # ===== Authentication Routes =====
 @api_router.post("/auth/register", response_model=TokenResponse)
-async def register(user_data: UserCreate):
+async def register(user_data: UserCreate, background_tasks: BackgroundTasks):
     existing_user = await db.users.find_one({"email": user_data.email.lower()})
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
     validate_password_strength(user_data.password)
     user_id = str(uuid.uuid4())
     company_id = None
+    company_name = None
     if user_data.role in ["super_admin", "hr_admin", "hr"]:
         company_name = (user_data.company_name or "").strip()
         if not company_name:
@@ -1991,6 +2444,17 @@ async def register(user_data: UserCreate):
     
     access_token = create_access_token(data={"sub": user_id, "role": user["role"]})
     await log_activity(user_id, "user_registered", f"New user registered: {user_data.email}")
+
+    if company_name and email_delivery_enabled():
+        try:
+            background_tasks.add_task(
+                send_hr_welcome_email,
+                recipient_email=user["email"],
+                first_name=user["first_name"],
+                company_name=company_name,
+            )
+        except Exception as exc:
+            logger.warning("Failed to queue welcome email for %s: %s", user["email"], exc)
     
     return TokenResponse(
         access_token=access_token,
@@ -4460,6 +4924,113 @@ async def create_payroll(pr: PayrollCreate, current_user: dict = Depends(require
         notes=pr.notes,
         created_at=payroll["created_at"]
     )
+
+
+@api_router.post("/payroll/review", response_model=PayrollReviewResponse)
+async def review_payroll_run(payload: PayrollReviewRequest, current_user: dict = Depends(require_admin)):
+    company_id = await get_current_company_id(current_user)
+    if not company_id:
+        raise HTTPException(status_code=400, detail="Company workspace not found")
+
+    review = await build_payroll_review(company_id, payload.pay_period_start, payload.pay_period_end)
+    await log_activity(
+        current_user["id"],
+        "payroll_reviewed",
+        f"Reviewed payroll run for {payload.pay_period_start} to {payload.pay_period_end}",
+        metadata={
+            "pay_period_start": payload.pay_period_start,
+            "pay_period_end": payload.pay_period_end,
+            "employee_count": review.employee_count,
+            "total_budget": review.total_budget,
+        },
+    )
+    return review
+
+
+@api_router.post("/payroll/review/pdf")
+async def payroll_review_pdf(payload: PayrollReviewRequest, current_user: dict = Depends(require_admin)):
+    company_id = await get_current_company_id(current_user)
+    if not company_id:
+        raise HTTPException(status_code=400, detail="Company workspace not found")
+
+    review = await build_payroll_review(company_id, payload.pay_period_start, payload.pay_period_end)
+    pdf_bytes = make_payroll_review_pdf(review)
+    filename = f"payroll_review_{payload.pay_period_start}_{payload.pay_period_end}.pdf"
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@api_router.post("/payroll/run")
+async def run_payroll(payload: PayrollReviewRequest, current_user: dict = Depends(require_admin)):
+    company_id = await get_current_company_id(current_user)
+    if not company_id:
+        raise HTTPException(status_code=400, detail="Company workspace not found")
+
+    review = await build_payroll_review(company_id, payload.pay_period_start, payload.pay_period_end)
+    if not review.rows:
+        raise HTTPException(status_code=400, detail="No payable attendance found for the selected payroll period")
+
+    payroll_ids: List[str] = []
+    paystub_ids: List[str] = []
+
+    for row in review.rows:
+        payroll_record = await upsert_payroll_record_from_review(
+            row,
+            payload.pay_period_start,
+            payload.pay_period_end,
+            company_id,
+        )
+        payroll_ids.append(payroll_record["id"])
+
+        if payload.send_paystubs:
+            saved_paystub = await upsert_paystub(
+                PaystubCreate(
+                    employee_id=row.employee_id,
+                    payroll_id=payroll_record["id"],
+                    pay_period_start=payload.pay_period_start,
+                    pay_period_end=payload.pay_period_end,
+                    gross_pay=row.gross_pay,
+                    deductions=row.deductions,
+                    tax=row.tax,
+                    insurance_deduction=row.insurance_deduction,
+                    pension_deduction=row.pension_deduction,
+                    benefits_deduction=row.benefits_deduction,
+                    bonus=row.bonus,
+                    net_pay=row.net_pay,
+                    pay_date=payload.pay_period_end,
+                    published=True,
+                ),
+                current_user,
+            )
+            paystub_ids.append(saved_paystub["id"])
+
+    await log_activity(
+        current_user["id"],
+        "payroll_run_completed" if payload.send_paystubs else "payroll_run_saved",
+        f"Processed payroll run for {payload.pay_period_start} to {payload.pay_period_end}",
+        metadata={
+            "pay_period_start": payload.pay_period_start,
+            "pay_period_end": payload.pay_period_end,
+            "payroll_ids": payroll_ids,
+            "paystub_ids": paystub_ids,
+            "total_budget": review.total_budget,
+            "employee_count": review.employee_count,
+        },
+    )
+
+    return {
+        "message": "Payroll processed and paystubs sent" if payload.send_paystubs else "Payroll processed successfully",
+        "payroll_ids": payroll_ids,
+        "paystub_ids": paystub_ids,
+        "employee_count": review.employee_count,
+        "total_budget": review.total_budget,
+        "pay_period_start": payload.pay_period_start,
+        "pay_period_end": payload.pay_period_end,
+    }
 
 @api_router.get("/payroll", response_model=List[PayrollResponse])
 async def get_payroll(
