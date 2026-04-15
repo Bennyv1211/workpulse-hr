@@ -66,7 +66,7 @@ export default function Employees() {
     last_name: '',
     email: '',
     phone: '',
-    department_id: '',
+    department_name: '',
     job_title: '',
     employee_id: '',
     start_date: '',
@@ -133,7 +133,7 @@ export default function Employees() {
         temporary_password: data.temporary_password,
         phone: data.phone || null,
         job_title: data.job_title,
-        department_id: data.department_id,
+        department_name: data.department_name,
         employment_type: data.employment_type || 'Full-time',
         start_date: data.start_date,
         date_of_birth: data.date_of_birth || null,
@@ -203,7 +203,7 @@ export default function Employees() {
     ]
 
     const instructionsRows = [
-      { field: 'department', required: 'yes', description: 'Must match an existing department name exactly' },
+      { field: 'department', required: 'yes', description: 'Enter any department name. If it does not exist yet, it will be created automatically.' },
       { field: 'role', required: 'no', description: 'employee, manager, or hr_admin' },
       { field: 'pay_type', required: 'yes', description: 'hourly or salary' },
       { field: 'hourly_rate', required: 'conditional', description: 'Required when pay_type is hourly' },
@@ -224,10 +224,6 @@ export default function Employees() {
     event.target.value = ''
 
     if (!file) return
-    if (!departments.length) {
-      window.alert('Load departments before importing employees.')
-      return
-    }
 
     setImporting(true)
     try {
@@ -245,7 +241,6 @@ export default function Employees() {
       }
 
       const leaveTypeMap = new Map(leaveTypes.map((type) => [type.name, type.id]))
-      const departmentByName = new Map(departments.map((dept) => [String(dept.name).trim().toLowerCase(), dept.id]))
       const created = []
       const failed = []
 
@@ -255,14 +250,13 @@ export default function Employees() {
         const last = String(row.last_name || '').trim()
         const emailValue = String(row.email || '').trim().toLowerCase()
         const job = String(row.job_title || '').trim()
-        const departmentValue = String(row.department || '').trim().toLowerCase()
+        const departmentValue = String(row.department || '').trim()
         const start = String(row.start_date || '').trim()
         const tempPassword = String(row.temporary_password || '').trim()
         const payType = normalizeImportedPayType(row.pay_type)
-        const departmentId = departmentByName.get(departmentValue)
 
-        if (!employeeNumber || !first || !last || !emailValue || !job || !departmentId || !start || !tempPassword) {
-          failed.push(`Row ${index + 2}: missing required fields or unknown department`)
+        if (!employeeNumber || !first || !last || !emailValue || !job || !departmentValue || !start || !tempPassword) {
+          failed.push(`Row ${index + 2}: missing required fields`)
           continue
         }
 
@@ -296,7 +290,7 @@ export default function Employees() {
           temporary_password: tempPassword,
           phone: String(row.phone || '').trim() || null,
           job_title: job,
-          department_id: departmentId,
+          department_name: departmentValue,
           employment_type: String(row.employment_type || 'Full-time').trim() || 'Full-time',
           start_date: start,
           date_of_birth: String(row.date_of_birth || '').trim() || null,
@@ -334,7 +328,7 @@ export default function Employees() {
       !formData.last_name ||
       !formData.email ||
       !formData.job_title ||
-      !formData.department_id ||
+      !formData.department_name ||
       !formData.start_date
     ) {
       setFormError('Employee ID, first name, last name, email, job title, department, and start date are required')
@@ -587,12 +581,14 @@ export default function Employees() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Department *</label>
-                  <select value={formData.department_id} onChange={(e) => setFormData({ ...formData, department_id: e.target.value })} className="input" required>
-                    <option value="">Select Department</option>
-                    {departments.map((dept) => (
-                      <option key={dept.id} value={dept.id}>{dept.name}</option>
-                    ))}
-                  </select>
+                  <input
+                    type="text"
+                    value={formData.department_name}
+                    onChange={(e) => setFormData({ ...formData, department_name: e.target.value })}
+                    className="input"
+                    placeholder="Sales"
+                    required
+                  />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Employment Type *</label>

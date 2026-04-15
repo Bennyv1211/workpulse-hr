@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   Users,
   Calendar,
+  CalendarDays,
   Clock,
   DollarSign,
   BarChart3,
@@ -27,6 +28,7 @@ export default function Layout() {
   const navigation = hrUser
     ? [
         { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+        { name: 'Schedules', href: '/dashboard/schedules', icon: CalendarDays },
         { name: 'Employees', href: '/dashboard/employees', icon: Users },
         { name: 'Leave Requests', href: '/dashboard/leave', icon: Calendar },
         { name: 'Attendance', href: '/dashboard/attendance', icon: Clock },
@@ -37,6 +39,7 @@ export default function Layout() {
       ]
     : [
         { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+        { name: 'Schedules', href: '/dashboard/schedules', icon: CalendarDays },
         { name: 'Leave Requests', href: '/dashboard/leave', icon: Calendar },
         { name: 'Attendance', href: '/dashboard/attendance', icon: Clock },
         { name: 'Settings', href: '/dashboard/settings', icon: Settings },

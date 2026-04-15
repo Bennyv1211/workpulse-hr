@@ -1,4 +1,5 @@
 import React from 'react'
+import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '../lib/api'
 import { useAuth } from '../contexts/AuthContext'
@@ -387,6 +388,21 @@ function ManagerDashboard({ dashboard, user }) {
                 ))}
               </div>
             )}
+          </div>
+
+          <div className="card bg-gradient-to-br from-blue-50 to-cyan-50 border border-blue-100">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Schedule Team Shifts</h2>
+                <p className="text-sm text-gray-600 mt-2">
+                  Assign schedules per employee or apply a week pattern to your whole department. Employees will see the shift in their schedule tab.
+                </p>
+              </div>
+              <Calendar className="w-6 h-6 text-primary-600" />
+            </div>
+            <Link to="/dashboard/schedules" className="btn-primary mt-5 inline-flex items-center gap-2">
+              Open Schedule Management
+            </Link>
           </div>
         </div>
       </div>

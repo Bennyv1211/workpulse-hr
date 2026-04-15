@@ -58,36 +58,64 @@ export default function Signup() {
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_#0f172a,_#1d4ed8_45%,_#38bdf8)] flex items-center justify-center p-4">
       <div className="w-full max-w-5xl grid lg:grid-cols-[1.1fr_0.9fr] rounded-[2rem] overflow-hidden shadow-2xl border border-white/15 bg-white">
-        <div className="hidden lg:flex flex-col justify-between p-10 bg-slate-950 text-white">
-          <div>
-            <img src="/emplora-wordmark.svg" alt="Emplora" className="h-14 w-auto brightness-0 invert" />
+        <div className="hidden lg:flex flex-col p-10 bg-slate-950 text-white">
+          <div className="flex-1 flex flex-col">
+            <img src="/emplora-wordmark.svg" alt="Emplora" className="h-14 w-auto" />
             <p className="mt-8 text-4xl font-bold leading-tight">
               Create the HR workspace that will manage employees, managers, payroll, leave approvals, paystubs, and reporting.
             </p>
             <p className="mt-5 text-slate-300 text-lg leading-8">
               This web signup is intentionally reserved for HR account creation. Employees do not register here, and manager access is added from inside the system.
             </p>
-          </div>
 
-          <div className="grid gap-4">
-            <div className="rounded-2xl bg-white/5 border border-white/10 p-5">
-              <div className="flex items-center gap-3 mb-2">
-                <ShieldCheck className="w-5 h-5 text-cyan-300" />
-                <p className="font-semibold">HR-only onboarding</p>
+            <div className="mt-8 rounded-3xl border border-white/10 bg-white/5 p-6">
+              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-cyan-300">What happens next</p>
+              <div className="mt-5 space-y-4 text-slate-300">
+                <div className="flex gap-4">
+                  <div className="mt-1 h-8 w-8 shrink-0 rounded-full bg-cyan-400/10 flex items-center justify-center text-cyan-300 font-semibold">1</div>
+                  <p className="leading-7">Create your company workspace with the right HR admin account and secure recovery details.</p>
+                </div>
+                <div className="flex gap-4">
+                  <div className="mt-1 h-8 w-8 shrink-0 rounded-full bg-cyan-400/10 flex items-center justify-center text-cyan-300 font-semibold">2</div>
+                  <p className="leading-7">Add managers and employees, set pay rates, leave balances, departments, and regular work hours.</p>
+                </div>
+                <div className="flex gap-4">
+                  <div className="mt-1 h-8 w-8 shrink-0 rounded-full bg-cyan-400/10 flex items-center justify-center text-cyan-300 font-semibold">3</div>
+                  <p className="leading-7">Run schedules, attendance, payroll, paystubs, approvals, exports, and reporting from one connected system.</p>
+                </div>
               </div>
-              <p className="text-sm text-slate-300">The account created here becomes the HR control center for your company setup.</p>
             </div>
-            <div className="rounded-2xl bg-white/5 border border-white/10 p-5">
-              <div className="flex items-center gap-3 mb-2">
-                <Building2 className="w-5 h-5 text-cyan-300" />
-                <p className="font-semibold">Built for company rollout</p>
+
+            <div className="mt-6 grid gap-4">
+              <div className="rounded-2xl bg-white/5 border border-white/10 p-5">
+                <div className="flex items-center gap-3 mb-2">
+                  <ShieldCheck className="w-5 h-5 text-cyan-300" />
+                  <p className="font-semibold">HR-only onboarding</p>
+                </div>
+                <p className="text-sm text-slate-300">The account created here becomes the HR control center for your company setup.</p>
               </div>
-              <p className="text-sm text-slate-300">Once inside, HR can create employees and managers, assign pay details, and manage leave balances and payroll.</p>
+              <div className="rounded-2xl bg-white/5 border border-white/10 p-5">
+                <div className="flex items-center gap-3 mb-2">
+                  <Building2 className="w-5 h-5 text-cyan-300" />
+                  <p className="font-semibold">Built for company rollout</p>
+                </div>
+                <p className="text-sm text-slate-300">Once inside, HR can create employees and managers, assign pay details, and manage leave balances and payroll.</p>
+              </div>
             </div>
           </div>
         </div>
 
         <div className="p-8 sm:p-10">
+          <div className="mb-6">
+            <Link
+              to="/"
+              className="inline-flex items-center gap-2 text-sm font-semibold text-slate-500 hover:text-primary-600"
+            >
+              <span aria-hidden="true">←</span>
+              Back to Home
+            </Link>
+          </div>
+
           <div className="text-center lg:text-left mb-8">
             <img src="/emplora-wordmark.svg" alt="Emplora" className="h-12 mx-auto lg:mx-0 mb-4" />
             <p className="text-gray-500 mt-1">Create an HR admin account for your company workspace.</p>

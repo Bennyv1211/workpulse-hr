@@ -8,6 +8,7 @@ import Signup from './pages/Signup'
 import ForgotPassword from './pages/ForgotPassword'
 import Dashboard from './pages/Dashboard'
 import Employees from './pages/Employees'
+import ScheduleManagement from './pages/ScheduleManagement'
 import Leave from './pages/Leave'
 import Attendance from './pages/Attendance'
 import Payroll from './pages/Payroll'
@@ -94,6 +95,14 @@ function App() {
           }
         >
           <Route index element={<Dashboard />} />
+          <Route
+            path="schedules"
+            element={
+              <ProtectedRoute>
+                <ScheduleManagement />
+              </ProtectedRoute>
+            }
+          />
           <Route
             path="employees"
             element={

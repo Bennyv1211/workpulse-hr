@@ -62,6 +62,16 @@ export default function Login() {
         </div>
 
         <div className="p-8 sm:p-10">
+          <div className="mb-6">
+            <Link
+              to="/"
+              className="inline-flex items-center gap-2 text-sm font-semibold text-slate-500 hover:text-primary-600"
+            >
+              <span aria-hidden="true">←</span>
+              Back to Home
+            </Link>
+          </div>
+
           <div className="text-center lg:text-left mb-8">
             <img src="/emplora-wordmark.svg" alt="Emplora" className="h-12 mx-auto lg:mx-0 mb-4" />
             <p className="text-gray-500 mt-1">Sign in for HR admins and managers only.</p>
