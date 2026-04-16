@@ -261,7 +261,7 @@ def send_hr_welcome_email(recipient_email: str, first_name: str, company_name: s
     )
 
 
-def send_contact_email(payload: ContactRequest) -> None:
+def send_contact_email(payload: "ContactRequest") -> None:
     support_email = os.environ.get("SUPPORT_EMAIL", "support@emplora.org").strip() or "support@emplora.org"
     employee_range = payload.employees or "Not provided"
     phone = payload.phone or "Not provided"
