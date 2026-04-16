@@ -30,11 +30,6 @@ const RAW_API_URL =
 
 const API_URL = RAW_API_URL.replace(/\/+$/, '');
 
-interface Department {
-  id: string;
-  name: string;
-}
-
 interface LeaveType {
   id: string;
   name: string;
@@ -98,10 +93,7 @@ export default function HREmployeeNewScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [isDownloadingTemplate, setIsDownloadingTemplate] = useState(false);
   const [isImportingEmployees, setIsImportingEmployees] = useState(false);
-  const [loadingDepartments, setLoadingDepartments] = useState(true);
-  const [departments, setDepartments] = useState<Department[]>([]);
   const [leaveTypes, setLeaveTypes] = useState<LeaveType[]>([]);
-  const [showDepartmentDropdown, setShowDepartmentDropdown] = useState(false);
   const [employmentType, setEmploymentType] = useState('Full-time');
   const [selectedRole, setSelectedRole] = useState<EmployeeRole>('employee');
 
@@ -111,7 +103,6 @@ export default function HREmployeeNewScreen() {
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [jobTitle, setJobTitle] = useState('');
-  const [departmentId, setDepartmentId] = useState('');
   const [departmentName, setDepartmentName] = useState('');
   const [startDate, setStartDate] = useState('');
   const [dateOfBirth, setDateOfBirth] = useState('');
@@ -164,18 +155,6 @@ export default function HREmployeeNewScreen() {
     return data;
   }, []);
 
-  const fetchDepartments = useCallback(async () => {
-    try {
-      setLoadingDepartments(true);
-      const data = await apiRequest('/api/departments');
-      setDepartments(Array.isArray(data) ? data : []);
-    } catch (error: any) {
-      Alert.alert('Error', error.message || 'Failed to load departments');
-    } finally {
-      setLoadingDepartments(false);
-    }
-  }, [apiRequest]);
-
   const fetchLeaveTypes = useCallback(async () => {
     try {
       const data = await apiRequest('/api/leave-types');
@@ -186,9 +165,8 @@ export default function HREmployeeNewScreen() {
   }, [apiRequest]);
 
   useEffect(() => {
-    fetchDepartments();
     fetchLeaveTypes();
-  }, [fetchDepartments, fetchLeaveTypes]);
+  }, [fetchLeaveTypes]);
 
   const isValidDateString = (value: string) => {
     if (!value.trim()) return true;
@@ -267,13 +245,6 @@ export default function HREmployeeNewScreen() {
     return leaveBalance;
   };
 
-  const findDepartmentIdByName = (name: string) => {
-    const normalized = name.trim().toLowerCase();
-    return (
-      departments.find((dept) => dept.name.trim().toLowerCase() === normalized)?.id || null
-    );
-  };
-
   const normalizeImportedRole = (value?: string): EmployeeRole => {
     const normalized = (value || 'employee').trim().toLowerCase();
     if (normalized === 'manager') return 'manager';
@@ -327,7 +298,7 @@ export default function HREmployeeNewScreen() {
       {
         field: 'department',
         required: 'yes',
-        description: 'Must match an existing department name in the app',
+        description: 'Enter any department name. If it does not exist yet, it will be created automatically.',
       },
       {
         field: 'role',
@@ -420,11 +391,6 @@ export default function HREmployeeNewScreen() {
   };
 
   const handleImportEmployees = async () => {
-    if (!departments.length) {
-      Alert.alert('Departments Missing', 'Load departments before importing employees.');
-      return;
-    }
-
     try {
       setIsImportingEmployees(true);
       const result = await DocumentPicker.getDocumentAsync({
@@ -475,19 +441,17 @@ export default function HREmployeeNewScreen() {
         const regularStart = String(row.regular_start_time || '09:00').trim();
         const regularEnd = String(row.regular_end_time || '17:00').trim();
         const payTypeValue = normalizeImportedPayType(String(row.pay_type || 'hourly'));
-        const departmentLookupId = findDepartmentIdByName(departmentValue);
-
         if (
           !employeeNumber ||
           !first ||
           !last ||
           !emailValue ||
           !job ||
-          !departmentLookupId ||
+          !departmentValue ||
           !start ||
           !tempPassword
         ) {
-          failed.push(`Row ${index + 2}: missing required fields or unknown department`);
+          failed.push(`Row ${index + 2}: missing required fields`);
           continue;
         }
 
@@ -525,7 +489,7 @@ export default function HREmployeeNewScreen() {
           temporary_password: tempPassword,
           phone: String(row.phone || '').trim() || null,
           job_title: job,
-          department_id: departmentLookupId,
+          department_name: departmentValue,
           employment_type: String(row.employment_type || 'Full-time').trim() || 'Full-time',
           start_date: start,
           date_of_birth: String(row.date_of_birth || '').trim() || null,
@@ -561,7 +525,6 @@ export default function HREmployeeNewScreen() {
 
   const handleSaveEmployee = async () => {
     Keyboard.dismiss();
-    setShowDepartmentDropdown(false);
 
     if (
       !employeeId.trim() ||
@@ -569,7 +532,7 @@ export default function HREmployeeNewScreen() {
       !lastName.trim() ||
       !email.trim() ||
       !jobTitle.trim() ||
-      !departmentId ||
+      !departmentName.trim() ||
       !startDate.trim()
     ) {
       Alert.alert('Missing Information', 'Please fill in all required fields.');
@@ -637,7 +600,7 @@ export default function HREmployeeNewScreen() {
         temporary_password: temporaryPassword.trim(),
         phone: phone.trim() || null,
         job_title: jobTitle.trim(),
-        department_id: departmentId,
+        department_name: departmentName.trim(),
         employment_type: employmentType,
         start_date: startDate.trim(),
         date_of_birth: dateOfBirth.trim() || null,
@@ -665,12 +628,6 @@ export default function HREmployeeNewScreen() {
     }
   };
 
-  const handleSelectDepartment = (dept: Department) => {
-    setDepartmentId(dept.id);
-    setDepartmentName(dept.name);
-    setShowDepartmentDropdown(false);
-  };
-
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.flex}>
@@ -692,10 +649,9 @@ export default function HREmployeeNewScreen() {
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-            onScrollBeginDrag={() => {
-              Keyboard.dismiss();
-              setShowDepartmentDropdown(false);
-            }}
+              onScrollBeginDrag={() => {
+                Keyboard.dismiss();
+              }}
           >
             <View style={styles.card}>
               <Text style={styles.sectionTitle}>Bulk Employee Import</Text>
@@ -743,48 +699,43 @@ export default function HREmployeeNewScreen() {
                 label="Employee Number"
                 value={employeeId}
                 onChangeText={setEmployeeId}
-                placeholder="EMP001"
-                required
-                onFocus={() => setShowDepartmentDropdown(false)}
-              />
+                  placeholder="EMP001"
+                  required
+                />
 
                 <InputField
                   label="First Name"
                   value={firstName}
                   onChangeText={setFirstName}
-                  placeholder="John"
-                  required
-                  onFocus={() => setShowDepartmentDropdown(false)}
-                />
+                    placeholder="John"
+                    required
+                  />
 
                 <InputField
                   label="Last Name"
                   value={lastName}
                   onChangeText={setLastName}
-                  placeholder="Smith"
-                  required
-                  onFocus={() => setShowDepartmentDropdown(false)}
-                />
+                    placeholder="Smith"
+                    required
+                  />
 
                 <InputField
                   label="Email"
                   value={email}
                   onChangeText={setEmail}
                   placeholder="john.smith@company.com"
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  required
-                  onFocus={() => setShowDepartmentDropdown(false)}
-                />
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    required
+                  />
 
                 <InputField
                   label="Phone Number"
                   value={phone}
                   onChangeText={setPhone}
-                  placeholder="+1 555 123 4567"
-                  keyboardType="phone-pad"
-                  onFocus={() => setShowDepartmentDropdown(false)}
-                />
+                    placeholder="+1 555 123 4567"
+                    keyboardType="phone-pad"
+                  />
 
                 <View style={styles.inputGroup}>
                   <Text style={styles.label}>Date of Birth</Text>
@@ -792,7 +743,6 @@ export default function HREmployeeNewScreen() {
                     style={styles.dateButton}
                     onPress={() => {
                       Keyboard.dismiss();
-                      setShowDepartmentDropdown(false);
                       setShowDateOfBirthPicker(true);
                     }}
                   >
@@ -811,7 +761,6 @@ export default function HREmployeeNewScreen() {
                     style={styles.dateButton}
                     onPress={() => {
                       Keyboard.dismiss();
-                      setShowDepartmentDropdown(false);
                       setShowStartDatePicker(true);
                     }}
                   >
@@ -832,68 +781,15 @@ export default function HREmployeeNewScreen() {
                   onChangeText={setJobTitle}
                   placeholder="Frontend Developer"
                   required
-                  onFocus={() => setShowDepartmentDropdown(false)}
                 />
 
-                <View style={styles.inputGroup}>
-                  <Text style={styles.label}>
-                    Department <Text style={styles.required}>*</Text>
-                  </Text>
-
-                  {loadingDepartments ? (
-                    <View style={styles.dropdownButton}>
-                      <ActivityIndicator size="small" color="#3B82F6" />
-                    </View>
-                  ) : (
-                    <View style={styles.dropdownWrap}>
-                      <TouchableOpacity
-                        style={styles.dropdownButton}
-                        activeOpacity={0.8}
-                        onPress={() => {
-                          Keyboard.dismiss();
-                          setShowDepartmentDropdown((prev) => !prev);
-                        }}
-                      >
-                        <Text
-                          style={[
-                            styles.dropdownText,
-                            !departmentName && styles.placeholderText,
-                          ]}
-                        >
-                          {departmentName || 'Select department'}
-                        </Text>
-                        <Ionicons
-                          name={showDepartmentDropdown ? 'chevron-up' : 'chevron-down'}
-                          size={20}
-                          color="#64748B"
-                        />
-                      </TouchableOpacity>
-
-                      {showDepartmentDropdown && (
-                        <View style={styles.dropdownMenu}>
-                          {departments.length === 0 ? (
-                            <View style={styles.dropdownItem}>
-                              <Text style={styles.placeholderText}>No departments found</Text>
-                            </View>
-                          ) : (
-                            departments.map((dept, index) => (
-                              <TouchableOpacity
-                                key={dept.id}
-                                style={[
-                                  styles.dropdownItem,
-                                  index === departments.length - 1 && styles.dropdownItemLast,
-                                ]}
-                                onPress={() => handleSelectDepartment(dept)}
-                              >
-                                <Text style={styles.dropdownItemText}>{dept.name}</Text>
-                              </TouchableOpacity>
-                            ))
-                          )}
-                        </View>
-                      )}
-                    </View>
-                  )}
-                </View>
+                <InputField
+                  label="Department"
+                  value={departmentName}
+                  onChangeText={setDepartmentName}
+                  placeholder="Sales"
+                  required
+                />
 
                 <View style={styles.inputGroup}>
                   <Text style={styles.label}>Account Role</Text>
@@ -968,7 +864,6 @@ export default function HREmployeeNewScreen() {
                   value={regularStartTime}
                   onChangeText={setRegularStartTime}
                   placeholder="09:00"
-                  onFocus={() => setShowDepartmentDropdown(false)}
                 />
 
                 <InputField
@@ -976,7 +871,6 @@ export default function HREmployeeNewScreen() {
                   value={regularEndTime}
                   onChangeText={setRegularEndTime}
                   placeholder="17:00"
-                  onFocus={() => setShowDepartmentDropdown(false)}
                 />
               </View>
 
@@ -1028,22 +922,20 @@ export default function HREmployeeNewScreen() {
                     value={hourlyRate}
                     onChangeText={setHourlyRate}
                     placeholder="25"
-                    keyboardType="numeric"
-                    required
-                    returnKeyType="done"
-                    onFocus={() => setShowDepartmentDropdown(false)}
-                  />
+                      keyboardType="numeric"
+                      required
+                      returnKeyType="done"
+                    />
                 ) : (
                   <InputField
                     label="Annual Salary"
                     value={salary}
                     onChangeText={setSalary}
                     placeholder="60000"
-                    keyboardType="numeric"
-                    required
-                    returnKeyType="done"
-                    onFocus={() => setShowDepartmentDropdown(false)}
-                  />
+                      keyboardType="numeric"
+                      required
+                      returnKeyType="done"
+                    />
                 )}
               </View>
 
@@ -1054,37 +946,33 @@ export default function HREmployeeNewScreen() {
                   label="Annual Leave Days"
                   value={annualLeaveBalance}
                   onChangeText={setAnnualLeaveBalance}
-                  placeholder="10"
-                  keyboardType="numeric"
-                  onFocus={() => setShowDepartmentDropdown(false)}
-                />
+                    placeholder="10"
+                    keyboardType="numeric"
+                  />
 
                 <InputField
                   label="Sick Leave Days"
                   value={sickLeaveBalance}
                   onChangeText={setSickLeaveBalance}
-                  placeholder="10"
-                  keyboardType="numeric"
-                  onFocus={() => setShowDepartmentDropdown(false)}
-                />
+                    placeholder="10"
+                    keyboardType="numeric"
+                  />
 
                 <InputField
                   label="Maternity Leave Days"
                   value={maternityLeaveBalance}
                   onChangeText={setMaternityLeaveBalance}
-                  placeholder="0"
-                  keyboardType="numeric"
-                  onFocus={() => setShowDepartmentDropdown(false)}
-                />
+                    placeholder="0"
+                    keyboardType="numeric"
+                  />
 
                 <InputField
                   label="Paternity Leave Days"
                   value={paternityLeaveBalance}
                   onChangeText={setPaternityLeaveBalance}
-                  placeholder="0"
-                  keyboardType="numeric"
-                  onFocus={() => setShowDepartmentDropdown(false)}
-                />
+                    placeholder="0"
+                    keyboardType="numeric"
+                  />
               </View>
 
               <View style={styles.card}>

@@ -2,18 +2,27 @@ import React, { useEffect } from 'react';
 import { Tabs } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import { useAuth, setGlobalTokenSetter } from '../../src/context/AuthContext';
+import { useTheme } from '../../src/context/ThemeContext';
 import { useHRStore } from '../../src/store/hrStore';
 import AppIcon from '../../src/components/AppIcon';
 
 function TabIconWrapper({
   children,
   focused,
+  isDark,
 }: {
   children: React.ReactNode;
   focused: boolean;
+  isDark: boolean;
 }) {
   return (
-    <View style={[styles.tabIconWrap, focused && styles.tabIconWrapActive]}>
+    <View
+      style={[
+        styles.tabIconWrap,
+        isDark && styles.tabIconWrapDark,
+        focused && styles.tabIconWrapActive,
+      ]}
+    >
       {children}
     </View>
   );
@@ -21,6 +30,7 @@ function TabIconWrapper({
 
 export default function TabLayout() {
   const { token } = useAuth();
+  const { colors, isDark } = useTheme();
   const { setToken } = useHRStore();
 
   useEffect(() => {
@@ -45,11 +55,15 @@ export default function TabLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarStyle: styles.tabBar,
-        tabBarActiveTintColor: '#3B82F6',
-        tabBarInactiveTintColor: '#94A3B8',
+        tabBarStyle: [
+          styles.tabBar,
+          { backgroundColor: colors.surface, borderTopColor: colors.border },
+        ],
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.textMuted,
         tabBarLabelStyle: styles.tabLabel,
         tabBarHideOnKeyboard: true,
+        sceneStyle: { backgroundColor: colors.background },
       }}
     >
       <Tabs.Screen
@@ -57,7 +71,7 @@ export default function TabLayout() {
         options={{
           title: 'Dashboard',
           tabBarIcon: ({ color, focused }) => (
-            <TabIconWrapper focused={focused}>
+            <TabIconWrapper focused={focused} isDark={isDark}>
               <AppIcon name="dashboard" size={22} color={color} />
             </TabIconWrapper>
           ),
@@ -69,7 +83,7 @@ export default function TabLayout() {
         options={{
           title: 'Clock',
           tabBarIcon: ({ color, focused }) => (
-            <TabIconWrapper focused={focused}>
+            <TabIconWrapper focused={focused} isDark={isDark}>
               <AppIcon name="clock" size={22} color={color} />
             </TabIconWrapper>
           ),
@@ -81,7 +95,7 @@ export default function TabLayout() {
         options={{
           title: 'Time Off',
           tabBarIcon: ({ color, focused }) => (
-            <TabIconWrapper focused={focused}>
+            <TabIconWrapper focused={focused} isDark={isDark}>
               <AppIcon name="time-off" size={22} color={color} />
             </TabIconWrapper>
           ),
@@ -93,7 +107,7 @@ export default function TabLayout() {
         options={{
           title: 'Schedule',
           tabBarIcon: ({ color, focused }) => (
-            <TabIconWrapper focused={focused}>
+            <TabIconWrapper focused={focused} isDark={isDark}>
               <AppIcon name="schedule" size={22} color={color} />
             </TabIconWrapper>
           ),
@@ -105,7 +119,7 @@ export default function TabLayout() {
         options={{
           title: 'Pay',
           tabBarIcon: ({ color, focused }) => (
-            <TabIconWrapper focused={focused}>
+            <TabIconWrapper focused={focused} isDark={isDark}>
               <AppIcon name="pay" size={22} color={color} />
             </TabIconWrapper>
           ),
@@ -117,7 +131,7 @@ export default function TabLayout() {
         options={{
           title: 'Me',
           tabBarIcon: ({ color, focused }) => (
-            <TabIconWrapper focused={focused}>
+            <TabIconWrapper focused={focused} isDark={isDark}>
               <AppIcon name="profile" size={22} color={color} />
             </TabIconWrapper>
           ),
@@ -153,6 +167,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#F8FAFC',
+  },
+  tabIconWrapDark: {
+    backgroundColor: '#162235',
   },
   tabIconWrapActive: {
     backgroundColor: '#DBEAFE',

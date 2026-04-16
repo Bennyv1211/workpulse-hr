@@ -15,6 +15,7 @@ import * as FileSystemLegacy from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as XLSX from 'xlsx';
 import { API_URL, useAuth } from '../../src/context/AuthContext';
+import { useTheme } from '../../src/context/ThemeContext';
 import AppIcon from '../../src/components/AppIcon';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -29,6 +30,7 @@ type DashboardCardProps = {
 export default function HRDashboardScreen() {
   const router = useRouter();
   const { user, logout } = useAuth();
+  const { colors, isDark, toggleTheme } = useTheme();
   const [seeding, setSeeding] = useState(false);
   const [backingUp, setBackingUp] = useState(false);
 
@@ -228,7 +230,7 @@ export default function HRDashboardScreen() {
   );
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
@@ -257,6 +259,22 @@ export default function HRDashboardScreen() {
           <Text style={styles.summaryText}>
             Manage employees, payroll, paystubs, and leave requests from one place.
           </Text>
+        </View>
+
+        <View style={[styles.themeCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <View style={styles.themeTextWrap}>
+            <Text style={[styles.themeTitle, { color: colors.text }]}>Theme</Text>
+            <Text style={[styles.themeSubtitle, { color: colors.textMuted }]}>
+              Switch the HR dashboard between light and dark mode.
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.themeToggle, { backgroundColor: isDark ? colors.primary : colors.primarySoft }]}
+            onPress={toggleTheme}
+          >
+            <Text style={styles.themeToggleText}>{isDark ? 'Dark' : 'Light'}</Text>
+          </TouchableOpacity>
         </View>
 
         {canSeedDemoData && (
@@ -429,6 +447,40 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     color: '#475569',
+  },
+  themeCard: {
+    borderRadius: 20,
+    borderWidth: 1,
+    padding: 18,
+    marginBottom: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16,
+  },
+  themeTextWrap: {
+    flex: 1,
+  },
+  themeTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  themeSubtitle: {
+    marginTop: 4,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  themeToggle: {
+    minWidth: 90,
+    borderRadius: 999,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    alignItems: 'center',
+  },
+  themeToggleText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
   },
   seedCard: {
     backgroundColor: '#0F172A',

@@ -16,6 +16,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/context/AuthContext';
+import { useTheme } from '../../src/context/ThemeContext';
 import AppIcon from '../../src/components/AppIcon';
 
 const RAW_API_URL =
@@ -85,6 +86,7 @@ const emptyDashboard: ManagerDashboardResponse = {
 export default function ManagerDashboardScreen() {
   const router = useRouter();
   const { user, logout } = useAuth();
+  const { colors, isDark, toggleTheme } = useTheme();
 
   const [dashboard, setDashboard] = useState<ManagerDashboardResponse>(emptyDashboard);
   const [loading, setLoading] = useState(true);
@@ -281,7 +283,7 @@ export default function ManagerDashboardScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container} edges={['top']}>
+      <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
         <View style={styles.center}>
           <ActivityIndicator size="large" color="#3B82F6" />
         </View>
@@ -290,7 +292,7 @@ export default function ManagerDashboardScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
@@ -309,12 +311,27 @@ export default function ManagerDashboardScreen() {
           <SummaryCard label="Late Today" value={dashboard.summary.late} color="#EF4444" />
         </View>
 
+        <View style={[styles.themeCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <View style={styles.themeTextWrap}>
+            <Text style={[styles.themeTitle, { color: colors.text }]}>Theme</Text>
+            <Text style={[styles.themeSub, { color: colors.textMuted }]}>
+              Switch your manager dashboard between light and dark mode.
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.themeButton, { backgroundColor: isDark ? colors.primary : colors.primarySoft }]}
+            onPress={toggleTheme}
+          >
+            <Text style={styles.themeButtonText}>{isDark ? 'Dark' : 'Light'}</Text>
+          </TouchableOpacity>
+        </View>
+
         <TouchableOpacity
-          style={styles.scheduleHeroCard}
+          style={[styles.scheduleHeroCard, { backgroundColor: colors.surfaceAlt, borderColor: colors.primarySoft }]}
           activeOpacity={0.88}
           onPress={() => router.push('/manager/schedules')}
         >
-          <View style={styles.scheduleHeroIconWrap}>
+          <View style={[styles.scheduleHeroIconWrap, { backgroundColor: colors.surface }]}>
             <AppIcon name="schedule" size={22} color="#2563EB" />
           </View>
           <View style={styles.scheduleHeroTextWrap}>
@@ -519,12 +536,10 @@ const styles = StyleSheet.create({
     color: '#64748B',
   },
   scheduleHeroCard: {
-    backgroundColor: '#EFF6FF',
     borderRadius: 20,
     padding: 18,
     marginBottom: 18,
     borderWidth: 1,
-    borderColor: '#BFDBFE',
     flexDirection: 'row',
     alignItems: 'center',
     gap: 14,
@@ -539,6 +554,40 @@ const styles = StyleSheet.create({
   },
   scheduleHeroTextWrap: {
     flex: 1,
+  },
+  themeCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    padding: 16,
+    marginBottom: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16,
+  },
+  themeTextWrap: {
+    flex: 1,
+  },
+  themeTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  themeSub: {
+    marginTop: 4,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  themeButton: {
+    minWidth: 90,
+    borderRadius: 999,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    alignItems: 'center',
+  },
+  themeButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
   },
   scheduleHeroTitle: {
     fontSize: 17,

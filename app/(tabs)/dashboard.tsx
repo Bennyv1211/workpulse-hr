@@ -15,6 +15,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { useFocusEffect } from 'expo-router';
 import { useAuth } from '../../src/context/AuthContext';
+import { useTheme } from '../../src/context/ThemeContext';
+import Svg, { Circle, G } from 'react-native-svg';
 
 const RAW_API_URL =
   process.env.EXPO_PUBLIC_BACKEND_URL ||
@@ -79,6 +81,7 @@ const CHART_BAR_MAX_HEIGHT = 140;
 
 export default function EmployeeDashboardScreen() {
   const { user } = useAuth();
+  const { colors, isDark } = useTheme();
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -363,6 +366,22 @@ export default function EmployeeDashboardScreen() {
     () => Math.max(dashboard.annualLeave.hours, dashboard.sickLeave.hours, 1),
     [dashboard.annualLeave.hours, dashboard.sickLeave.hours]
   );
+  const statusSegments = useMemo(
+    () => [
+      { label: 'Working', value: dashboard.status === 'working' ? 1 : 0.18, color: '#10B981' },
+      { label: 'On Break', value: dashboard.status === 'on_break' ? 1 : 0.18, color: '#F59E0B' },
+      { label: 'Clocked Out', value: dashboard.status === 'clocked_out' ? 1 : 0.18, color: '#94A3B8' },
+    ],
+    [dashboard.status]
+  );
+  const attendanceSegments = useMemo(() => {
+    const worked = Math.max(dashboard.hoursThisWeek, 0);
+    const remaining = Math.max(weeklyGoalHours - worked, 0);
+    return [
+      { label: 'Worked', value: worked || 0.2, color: '#2563EB' },
+      { label: 'Remaining', value: remaining || 0.2, color: isDark ? '#22324A' : '#DBEAFE' },
+    ];
+  }, [dashboard.hoursThisWeek, isDark]);
 
   const statusConfig = useMemo(() => {
     if (dashboard.status === 'working') {

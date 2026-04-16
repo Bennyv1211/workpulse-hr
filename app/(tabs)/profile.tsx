@@ -10,10 +10,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../src/context/AuthContext';
+import { useTheme } from '../../src/context/ThemeContext';
 import AppIcon from '../../src/components/AppIcon';
 
 export default function ProfileScreen() {
   const { user, logout } = useAuth();
+  const { colors, isDark, toggleTheme } = useTheme();
   const router = useRouter();
 
   const handleLogout = () => {
@@ -35,30 +37,35 @@ export default function ProfileScreen() {
   };
 
   const MenuItem = ({ icon, label, onPress, showArrow = true, color = '#3B82F6', danger = false }: any) => (
-    <TouchableOpacity style={styles.menuItem} onPress={onPress}>
-      <View style={[styles.menuIcon, { backgroundColor: danger ? '#FEE2E2' : color + '15' }]}>
+    <TouchableOpacity style={[styles.menuItem, { borderBottomColor: colors.border }]} onPress={onPress}>
+      <View
+        style={[
+          styles.menuIcon,
+          { backgroundColor: danger ? (isDark ? '#451A1A' : '#FEE2E2') : `${color}20` },
+        ]}
+      >
         <AppIcon name={icon} size={22} color={danger ? '#EF4444' : color} />
       </View>
-      <Text style={[styles.menuLabel, danger && { color: '#EF4444' }]}>{label}</Text>
-      {showArrow && <Text style={styles.chevron}>{'>'}</Text>}
+      <Text style={[styles.menuLabel, { color: colors.text }, danger && { color: '#EF4444' }]}>{label}</Text>
+      {showArrow && <Text style={[styles.chevron, { color: colors.textMuted }]}>{'>'}</Text>}
     </TouchableOpacity>
   );
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        <View style={styles.profileHeader}>
-          <View style={styles.avatar}>
+        <View style={[styles.profileHeader, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
+          <View style={[styles.avatar, { backgroundColor: colors.primary }]}>
             <Text style={styles.avatarText}>
               {user?.first_name?.[0]}{user?.last_name?.[0]}
             </Text>
           </View>
-          <Text style={styles.profileName}>{user?.first_name} {user?.last_name}</Text>
-          <Text style={styles.profileEmail}>{user?.email}</Text>
+          <Text style={[styles.profileName, { color: colors.text }]}>{user?.first_name} {user?.last_name}</Text>
+          <Text style={[styles.profileEmail, { color: colors.textMuted }]}>{user?.email}</Text>
         </View>
 
         <View style={styles.section}>
-          <View style={styles.menuCard}>
+          <View style={[styles.menuCard, { backgroundColor: colors.surface }]}>
             <MenuItem
               icon="edit-profile"
               label="Edit Profile"
@@ -75,7 +82,29 @@ export default function ProfileScreen() {
         </View>
 
         <View style={styles.section}>
-          <View style={styles.menuCard}>
+          <View style={[styles.themeCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <View style={styles.themeTextWrap}>
+              <Text style={[styles.themeTitle, { color: colors.text }]}>Theme</Text>
+              <Text style={[styles.themeSubtitle, { color: colors.textMuted }]}>
+                Switch between light and dark mode
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={[
+                styles.themeToggle,
+                { backgroundColor: isDark ? colors.primary : colors.primarySoft },
+              ]}
+              onPress={toggleTheme}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.themeToggleText}>{isDark ? 'Dark' : 'Light'}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <View style={styles.section}>
+          <View style={[styles.menuCard, { backgroundColor: colors.surface }]}>
             <MenuItem
               icon="help"
               label="Help & Support"
@@ -86,7 +115,7 @@ export default function ProfileScreen() {
         </View>
 
         <View style={styles.section}>
-          <View style={styles.menuCard}>
+          <View style={[styles.menuCard, { backgroundColor: colors.surface }]}>
             <MenuItem
               icon="logout"
               label="Logout"
@@ -98,7 +127,7 @@ export default function ProfileScreen() {
         </View>
 
         <View style={styles.footer}>
-          <Text style={styles.footerText}>Emplora v2.0</Text>
+          <Text style={[styles.footerText, { color: colors.textMuted }]}>Emplora v2.0</Text>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -149,7 +178,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   menuCard: {
-    backgroundColor: '#FFFFFF',
     borderRadius: 16,
     overflow: 'hidden',
     shadowColor: '#000',
@@ -164,7 +192,6 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     paddingHorizontal: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
   },
   menuIcon: {
     width: 42,
@@ -178,7 +205,39 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 16,
     fontWeight: '500',
-    color: '#1E293B',
+  },
+  themeCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    padding: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  themeTextWrap: {
+    flex: 1,
+    paddingRight: 16,
+  },
+  themeTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  themeSubtitle: {
+    marginTop: 4,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  themeToggle: {
+    minWidth: 88,
+    borderRadius: 999,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    alignItems: 'center',
+  },
+  themeToggleText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
   },
   footer: {
     alignItems: 'center',
