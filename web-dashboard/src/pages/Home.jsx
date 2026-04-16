@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import api from '../lib/api'
 import {
   Clock,
   Users,
@@ -38,7 +39,14 @@ export default function Home() {
     event.preventDefault()
     setIsSubmitting(true)
     try {
-      await new Promise((resolve) => setTimeout(resolve, 1500))
+      await api.post('/contact', {
+        business_name: formData.businessName,
+        contact_name: formData.contactName,
+        email: formData.email,
+        phone: formData.phone,
+        employees: formData.employees,
+        message: formData.message,
+      })
       setSubmitSuccess(true)
       setFormData({
         businessName: '',
@@ -50,6 +58,7 @@ export default function Home() {
       })
     } catch (error) {
       console.error('Error submitting form:', error)
+      alert(error.response?.data?.detail || 'Unable to send your message right now. Please email info@emplora.org directly.')
     } finally {
       setIsSubmitting(false)
     }
@@ -390,7 +399,7 @@ export default function Home() {
                     <CheckCircle className="w-8 h-8 text-green-600" />
                   </div>
                   <h3 className="text-2xl font-bold text-gray-900 mb-2">Thank You!</h3>
-                  <p className="text-gray-600 mb-6">We have your message and will reach out within 24 hours.</p>
+                  <p className="text-gray-600 mb-6">We have your message at info@emplora.org and will reach out within 24 hours.</p>
                   <button onClick={() => setSubmitSuccess(false)} className="text-primary-600 font-medium hover:text-primary-700">
                     Send another message
                   </button>
@@ -398,6 +407,7 @@ export default function Home() {
               ) : (
                 <form onSubmit={handleSubmit}>
                   <h3 className="text-2xl font-bold text-gray-900 mb-6">Contact Us</h3>
+                  <p className="text-sm text-gray-500 mb-5">This form sends directly to <span className="font-semibold text-gray-700">info@emplora.org</span>.</p>
                   <div className="space-y-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Business Name *</label>

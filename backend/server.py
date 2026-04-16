@@ -260,6 +260,49 @@ def send_hr_welcome_email(recipient_email: str, first_name: str, company_name: s
         html_body=email_payload["html"],
     )
 
+
+def send_contact_email(payload: ContactRequest) -> None:
+    support_email = os.environ.get("SUPPORT_EMAIL", "info@emplora.org").strip() or "info@emplora.org"
+    employee_range = payload.employees or "Not provided"
+    phone = payload.phone or "Not provided"
+    message = payload.message or "No message provided."
+
+    text_body = f"""New Emplora contact request
+
+Business Name: {payload.business_name}
+Contact Name: {payload.contact_name}
+Email: {payload.email}
+Phone: {phone}
+Employee Range: {employee_range}
+
+Message:
+{message}
+"""
+
+    html_body = f"""
+    <html>
+      <body style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.6;">
+        <h2 style="margin-bottom: 12px;">New Emplora contact request</h2>
+        <p><strong>Business Name:</strong> {payload.business_name}</p>
+        <p><strong>Contact Name:</strong> {payload.contact_name}</p>
+        <p><strong>Email:</strong> {payload.email}</p>
+        <p><strong>Phone:</strong> {phone}</p>
+        <p><strong>Employee Range:</strong> {employee_range}</p>
+        <p><strong>Message:</strong></p>
+        <div style="padding: 12px; background: #f8fafc; border-radius: 10px; border: 1px solid #e2e8f0;">
+          {message.replace(chr(10), '<br />')}
+        </div>
+      </body>
+    </html>
+    """
+
+    send_email_message(
+        to_email=support_email,
+        subject=f"New Emplora contact request from {payload.business_name}",
+        text_body=text_body,
+        html_body=html_body,
+    )
+
 def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Calculate the distance between two points on Earth in meters"""
     R = 6371000  # Earth's radius in meters
@@ -1917,6 +1960,15 @@ class PayrollReviewResponse(BaseModel):
     employee_count: int
     rows: List[PayrollReviewRow]
 
+
+class ContactRequest(BaseModel):
+    business_name: str
+    contact_name: str
+    email: EmailStr
+    phone: Optional[str] = None
+    employees: Optional[str] = None
+    message: Optional[str] = None
+
 class PaystubCreate(BaseModel):
     employee_id: str
     payroll_id: Optional[str] = None
@@ -2471,6 +2523,23 @@ async def register(user_data: UserCreate, background_tasks: BackgroundTasks):
             created_at=user["created_at"]
         )
     )
+
+
+@api_router.post("/contact")
+async def contact_us(payload: ContactRequest):
+    if not email_delivery_enabled():
+        raise HTTPException(status_code=503, detail="Contact email is not configured")
+
+    try:
+        send_contact_email(payload)
+    except Exception as exc:
+        logger.warning("Failed to send contact email for %s: %s", payload.email, exc)
+        raise HTTPException(status_code=500, detail="Unable to send contact request right now")
+
+    return {
+        "message": "Contact request sent successfully",
+        "sent_to": os.environ.get("SUPPORT_EMAIL", "info@emplora.org").strip() or "info@emplora.org",
+    }
 
 @api_router.post("/auth/login", response_model=TokenResponse)
 async def login(credentials: UserLogin):
