@@ -30,6 +30,11 @@ function formatMoney(value) {
   return `$${Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
+function parseMoneyInput(value) {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : 0
+}
+
 function toInputDate(value) {
   if (!value) return ''
   return value
@@ -58,6 +63,7 @@ function PayrollReviewModal({
   onExportExcel,
   onSendPayroll,
   isSendingPayroll,
+  onReviewValueChange,
 }) {
   if (!isOpen) return null
 
@@ -181,7 +187,12 @@ function PayrollReviewModal({
                         <th className="text-left px-5 py-3 text-xs font-semibold uppercase tracking-wide text-gray-500">Hours</th>
                         <th className="text-left px-5 py-3 text-xs font-semibold uppercase tracking-wide text-gray-500">Base Rate</th>
                         <th className="text-left px-5 py-3 text-xs font-semibold uppercase tracking-wide text-gray-500">Gross</th>
-                        <th className="text-left px-5 py-3 text-xs font-semibold uppercase tracking-wide text-gray-500">Deductions</th>
+                        <th className="text-left px-5 py-3 text-xs font-semibold uppercase tracking-wide text-gray-500">Tax</th>
+                        <th className="text-left px-5 py-3 text-xs font-semibold uppercase tracking-wide text-gray-500">Other</th>
+                        <th className="text-left px-5 py-3 text-xs font-semibold uppercase tracking-wide text-gray-500">Insurance</th>
+                        <th className="text-left px-5 py-3 text-xs font-semibold uppercase tracking-wide text-gray-500">Pension</th>
+                        <th className="text-left px-5 py-3 text-xs font-semibold uppercase tracking-wide text-gray-500">Benefits</th>
+                        <th className="text-left px-5 py-3 text-xs font-semibold uppercase tracking-wide text-gray-500">Total Deductions</th>
                         <th className="text-left px-5 py-3 text-xs font-semibold uppercase tracking-wide text-gray-500">Net</th>
                       </tr>
                     </thead>
@@ -195,7 +206,62 @@ function PayrollReviewModal({
                           <td className="px-5 py-4 text-gray-700">{Number(row.hours_worked || 0).toFixed(2)}h</td>
                           <td className="px-5 py-4 text-gray-700">{formatMoney(row.base_rate)}</td>
                           <td className="px-5 py-4 font-medium text-green-600">{formatMoney(row.gross_pay)}</td>
-                          <td className="px-5 py-4 text-red-600">{formatMoney(row.total_deductions)}</td>
+                          <td className="px-5 py-4 min-w-[110px]">
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={row.tax ?? 0}
+                              onChange={(event) => onReviewValueChange(row.employee_id, 'tax', event.target.value)}
+                              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm"
+                            />
+                            <p className="text-[11px] text-gray-400 mt-1">Tax</p>
+                          </td>
+                          <td className="px-5 py-4 min-w-[120px]">
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={row.deductions ?? 0}
+                              onChange={(event) => onReviewValueChange(row.employee_id, 'deductions', event.target.value)}
+                              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm"
+                            />
+                            <p className="text-[11px] text-gray-400 mt-1">Other</p>
+                          </td>
+                          <td className="px-5 py-4 min-w-[120px]">
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={row.insurance_deduction ?? 0}
+                              onChange={(event) => onReviewValueChange(row.employee_id, 'insurance_deduction', event.target.value)}
+                              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm"
+                            />
+                            <p className="text-[11px] text-gray-400 mt-1">Insurance</p>
+                          </td>
+                          <td className="px-5 py-4 min-w-[120px]">
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={row.pension_deduction ?? 0}
+                              onChange={(event) => onReviewValueChange(row.employee_id, 'pension_deduction', event.target.value)}
+                              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm"
+                            />
+                            <p className="text-[11px] text-gray-400 mt-1">Pension</p>
+                          </td>
+                          <td className="px-5 py-4 min-w-[120px]">
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={row.benefits_deduction ?? 0}
+                              onChange={(event) => onReviewValueChange(row.employee_id, 'benefits_deduction', event.target.value)}
+                              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm"
+                            />
+                            <p className="text-[11px] text-gray-400 mt-1">Benefits</p>
+                          </td>
+                          <td className="px-5 py-4 text-red-600 font-medium">{formatMoney(row.total_deductions)}</td>
                           <td className="px-5 py-4 font-bold text-gray-900">{formatMoney(row.net_pay)}</td>
                         </tr>
                       ))}
@@ -216,6 +282,20 @@ export default function Payroll() {
   const [reviewOpen, setReviewOpen] = useState(false)
   const [filters, setFilters] = useState(buildDefaultRange)
   const [review, setReview] = useState(null)
+
+  const reviewRowsPayload = useMemo(
+    () =>
+      (review?.rows || []).map((row) => ({
+        employee_id: row.employee_id,
+        bonus: Number(row.bonus || 0),
+        deductions: Number(row.deductions || 0),
+        tax: Number(row.tax || 0),
+        insurance_deduction: Number(row.insurance_deduction || 0),
+        pension_deduction: Number(row.pension_deduction || 0),
+        benefits_deduction: Number(row.benefits_deduction || 0),
+      })),
+    [review]
+  )
 
   const { data: payroll = [], isLoading } = useQuery({
     queryKey: ['payroll'],
@@ -313,7 +393,39 @@ export default function Payroll() {
   }
 
   const handleGenerateReview = () => {
-    reviewMutation.mutate(filters)
+    reviewMutation.mutate({ ...filters, rows: reviewRowsPayload })
+  }
+
+  const handleReviewValueChange = (employeeId, field, value) => {
+    setReview((current) => {
+      if (!current) return current
+
+      const rows = current.rows.map((row) => {
+        if (row.employee_id !== employeeId) return row
+        const updatedRow = {
+          ...row,
+          [field]: parseMoneyInput(value),
+        }
+        updatedRow.total_deductions = Number(
+          (updatedRow.tax || 0) +
+          (updatedRow.deductions || 0) +
+          (updatedRow.insurance_deduction || 0) +
+          (updatedRow.pension_deduction || 0) +
+          (updatedRow.benefits_deduction || 0)
+        )
+        updatedRow.net_pay = Number(updatedRow.gross_pay || 0) - Number(updatedRow.total_deductions || 0)
+        return updatedRow
+      })
+
+      return {
+        ...current,
+        rows,
+        total_deductions: rows.reduce((sum, row) => sum + Number(row.total_deductions || 0), 0),
+        total_net: rows.reduce((sum, row) => sum + Number(row.net_pay || 0), 0),
+        total_budget: rows.reduce((sum, row) => sum + Number(row.net_pay || 0), 0),
+        total_tax: rows.reduce((sum, row) => sum + Number(row.tax || 0), 0),
+      }
+    })
   }
 
   const handleExportExcel = () => {
@@ -489,10 +601,11 @@ export default function Payroll() {
         review={review}
         isReviewLoading={reviewMutation.isPending}
         onGenerateReview={handleGenerateReview}
-        onDownloadPdf={() => reviewPdfMutation.mutate(filters)}
+        onDownloadPdf={() => reviewPdfMutation.mutate({ ...filters, rows: reviewRowsPayload })}
         onExportExcel={handleExportExcel}
-        onSendPayroll={() => runPayrollMutation.mutate({ ...filters, send_paystubs: true })}
+        onSendPayroll={() => runPayrollMutation.mutate({ ...filters, rows: reviewRowsPayload, send_paystubs: true })}
         isSendingPayroll={runPayrollMutation.isPending}
+        onReviewValueChange={handleReviewValueChange}
       />
     </div>
   )

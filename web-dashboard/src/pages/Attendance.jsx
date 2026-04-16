@@ -1,5 +1,5 @@
 import React from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { format, parseISO } from 'date-fns'
 import {
   Download,
@@ -9,6 +9,9 @@ import {
   Plane,
   Coffee,
   MapPin,
+  Pencil,
+  Save,
+  X,
 } from 'lucide-react'
 import api from '../lib/api'
 import { useAuth } from '../contexts/AuthContext'
@@ -31,9 +34,84 @@ function formatLocation(location) {
   return `${latitude}, ${longitude}`
 }
 
+function formatRecordedTime(localValue, utcValue) {
+  if (typeof localValue === 'string' && localValue.includes('T')) {
+    return localValue.split('T')[1]?.slice(0, 5) || '-'
+  }
+  if (typeof localValue === 'string' && localValue.length >= 5) {
+    return localValue.slice(0, 5)
+  }
+  if (utcValue) {
+    return format(new Date(utcValue), 'HH:mm')
+  }
+  return '-'
+}
+
+function AttendanceEditModal({ record, draft, onChange, onClose, onSave, isSaving }) {
+  if (!record) return null
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden">
+        <div className="px-6 py-5 border-b border-gray-200 flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900">Adjust Attendance</h2>
+            <p className="text-gray-500">{record.employee_name} • {record.date ? format(parseISO(record.date), 'MMM d, yyyy') : ''}</p>
+          </div>
+          <button type="button" onClick={onClose} className="p-2 rounded-xl hover:bg-gray-100 text-gray-500">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="p-6 space-y-5">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">Clock In</label>
+              <input
+                type="time"
+                value={draft.clock_in}
+                onChange={(event) => onChange('clock_in', event.target.value)}
+                className="w-full border border-gray-200 rounded-2xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">Clock Out</label>
+              <input
+                type="time"
+                value={draft.clock_out}
+                onChange={(event) => onChange('clock_out', event.target.value)}
+                className="w-full border border-gray-200 rounded-2xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary-500"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">Notes</label>
+            <textarea
+              rows={3}
+              value={draft.notes}
+              onChange={(event) => onChange('notes', event.target.value)}
+              className="w-full border border-gray-200 rounded-2xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary-500 resize-none"
+              placeholder="Add an adjustment note"
+            />
+          </div>
+          <div className="flex justify-end gap-3">
+            <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
+            <button type="button" onClick={onSave} disabled={isSaving} className="btn-primary flex items-center gap-2">
+              <Save className="w-4 h-4" />
+              {isSaving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Attendance() {
   const { user } = useAuth()
+  const queryClient = useQueryClient()
   const hrUser = isHrRole(user?.role)
+  const [editingRecord, setEditingRecord] = React.useState(null)
+  const [attendanceDraft, setAttendanceDraft] = React.useState({ clock_in: '', clock_out: '', notes: '' })
 
   const { data, isLoading } = useQuery({
     queryKey: [hrUser ? 'attendance' : 'manager-dashboard-attendance'],
@@ -52,6 +130,17 @@ export default function Attendance() {
     },
     onSuccess: (blob) => {
       downloadBlob(blob, 'attendance.csv')
+    }
+  })
+
+  const adjustMutation = useMutation({
+    mutationFn: async ({ attendanceId, payload }) => {
+      const response = await api.put(`/attendance/${attendanceId}/adjust`, payload)
+      return response.data
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['attendance'] })
+      setEditingRecord(null)
     }
   })
 
@@ -79,6 +168,15 @@ export default function Attendance() {
         { title: 'Clocked Out', value: stats.absent, icon: UserX, color: 'text-slate-600', bgColor: 'bg-slate-100' },
         { title: 'Late', value: stats.late, icon: Clock, color: 'text-rose-600', bgColor: 'bg-rose-50' },
       ]
+
+  const openEditModal = (record) => {
+    setEditingRecord(record)
+    setAttendanceDraft({
+      clock_in: formatRecordedTime(record.clock_in_local || record.actual_clock_in, record.clock_in) === '-' ? '' : formatRecordedTime(record.clock_in_local || record.actual_clock_in, record.clock_in),
+      clock_out: formatRecordedTime(record.clock_out_local || record.actual_clock_out, record.clock_out) === '-' ? '' : formatRecordedTime(record.clock_out_local || record.actual_clock_out, record.clock_out),
+      notes: record.notes || '',
+    })
+  }
 
   return (
     <div className="space-y-6">
@@ -115,7 +213,7 @@ export default function Attendance() {
 
       <div className="card p-0 overflow-hidden">
         <div className="px-6 py-4 border-b border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-900">{hrUser ? 'Recent Attendance Records' : 'Today\'s Team Activity'}</h2>
+          <h2 className="text-lg font-semibold text-gray-900">{hrUser ? 'Recent Attendance Records' : "Today's Team Activity"}</h2>
         </div>
         {isLoading ? (
           <div className="flex items-center justify-center h-64">
@@ -137,6 +235,7 @@ export default function Attendance() {
                   <th className="text-left py-4 px-6 font-semibold text-gray-600 text-sm">Clock Out</th>
                   <th className="text-left py-4 px-6 font-semibold text-gray-600 text-sm">Hours</th>
                   <th className="text-left py-4 px-6 font-semibold text-gray-600 text-sm">Status</th>
+                  <th className="text-right py-4 px-6 font-semibold text-gray-600 text-sm">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -144,11 +243,17 @@ export default function Attendance() {
                   <tr key={record.id} className="hover:bg-gray-50 transition-colors">
                     <td className="py-4 px-6 font-medium text-gray-900">{record.employee_name}</td>
                     <td className="py-4 px-6 text-gray-700">{format(parseISO(record.date), 'MMM d, yyyy')}</td>
-                    <td className="py-4 px-6 text-gray-700">{record.clock_in ? format(new Date(record.clock_in), 'HH:mm') : '-'}</td>
-                    <td className="py-4 px-6 text-gray-700">{record.clock_out ? format(new Date(record.clock_out), 'HH:mm') : '-'}</td>
-                    <td className="py-4 px-6 text-gray-700">{record.total_hours ? `${record.total_hours.toFixed(1)}h` : '-'}</td>
+                    <td className="py-4 px-6 text-gray-700">{formatRecordedTime(record.clock_in_local || record.actual_clock_in, record.clock_in)}</td>
+                    <td className="py-4 px-6 text-gray-700">{formatRecordedTime(record.clock_out_local || record.actual_clock_out, record.clock_out)}</td>
+                    <td className="py-4 px-6 text-gray-700">{record.total_hours ? `${Number(record.total_hours).toFixed(1)}h` : '-'}</td>
                     <td className="py-4 px-6">
                       <span className="px-3 py-1 rounded-full text-xs font-medium capitalize bg-gray-100 text-gray-700">{record.status}</span>
+                    </td>
+                    <td className="py-4 px-6 text-right">
+                      <button type="button" onClick={() => openEditModal(record)} className="inline-flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-gray-100 text-gray-600">
+                        <Pencil className="w-4 h-4" />
+                        Edit
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -205,6 +310,20 @@ export default function Attendance() {
           </div>
         )}
       </div>
+
+      <AttendanceEditModal
+        record={editingRecord}
+        draft={attendanceDraft}
+        onChange={(field, value) => setAttendanceDraft((current) => ({ ...current, [field]: value }))}
+        onClose={() => setEditingRecord(null)}
+        onSave={() =>
+          adjustMutation.mutate({
+            attendanceId: editingRecord.id,
+            payload: attendanceDraft,
+          })
+        }
+        isSaving={adjustMutation.isPending}
+      />
     </div>
   )
 }

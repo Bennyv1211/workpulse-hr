@@ -619,12 +619,18 @@ def make_payroll_review_pdf(review: "PayrollReviewResponse") -> bytes:
     return pdf
 
 
-async def build_payroll_review(company_id: str, pay_period_start: str, pay_period_end: str) -> "PayrollReviewResponse":
+async def build_payroll_review(
+    company_id: str,
+    pay_period_start: str,
+    pay_period_end: str,
+    overrides: Optional[List["PayrollReviewOverrideRow"]] = None,
+) -> "PayrollReviewResponse":
     employees = await db.employees.find({"company_id": company_id, "status": {"$ne": "archived"}}).to_list(2000)
     departments = {
         department["id"]: department["name"]
         for department in await db.departments.find({"company_id": company_id}).to_list(500)
     }
+    override_map = {item.employee_id: item for item in (overrides or [])}
 
     attendance_records = await db.attendance.find(
         {
@@ -657,12 +663,13 @@ async def build_payroll_review(company_id: str, pay_period_start: str, pay_perio
         overtime_rate = 1.5
         basic_salary = round(worked_hours * base_rate, 2)
         overtime_pay = round(overtime_hours * base_rate * overtime_rate, 2)
-        bonus = 0.0
-        deductions = 0.0
-        tax = 0.0
-        insurance_deduction = 0.0
-        pension_deduction = 0.0
-        benefits_deduction = 0.0
+        override = override_map.get(employee["id"])
+        bonus = float(override.bonus) if override else 0.0
+        deductions = float(override.deductions) if override else 0.0
+        tax = float(override.tax) if override else 0.0
+        insurance_deduction = float(override.insurance_deduction) if override else 0.0
+        pension_deduction = float(override.pension_deduction) if override else 0.0
+        benefits_deduction = float(override.benefits_deduction) if override else 0.0
         gross_pay = round(basic_salary + overtime_pay + bonus, 2)
         total_deduction_amount = round(
             deductions + tax + insurance_deduction + pension_deduction + benefits_deduction,
@@ -1078,6 +1085,23 @@ def calculate_lateness(date_value: str, scheduled_start_time: Optional[str], act
     actual_naive = actual_clock_in.replace(tzinfo=None) if actual_clock_in.tzinfo else actual_clock_in
     minutes_late = max(0, int((actual_naive - scheduled_dt).total_seconds() // 60))
     return {"late_status": minutes_late > 0, "minutes_late": minutes_late}
+
+
+def build_attendance_adjusted_times(date_value: str, time_value: str, timezone_name: Optional[str]) -> tuple[datetime, str]:
+    normalized_time = normalize_time_string(time_value)
+    if not normalized_time:
+        raise HTTPException(status_code=400, detail="Invalid time format")
+
+    local_iso = f"{date_value}T{normalized_time}:00"
+    if timezone_name:
+        try:
+            local_dt = datetime.fromisoformat(local_iso).replace(tzinfo=ZoneInfo(timezone_name))
+            return local_dt.astimezone(ZoneInfo("UTC")), local_dt.isoformat()
+        except Exception:
+            pass
+
+    naive_dt = datetime.fromisoformat(local_iso)
+    return naive_dt, naive_dt.isoformat()
 
 
 def serialize_attendance_response(record: dict, employee_name: Optional[str] = None) -> "AttendanceResponse":
@@ -1658,6 +1682,12 @@ class AttendanceManualCreate(BaseModel):
     notes: Optional[str] = None
 
 
+class AttendanceAdjustRequest(BaseModel):
+    clock_in: Optional[str] = None
+    clock_out: Optional[str] = None
+    notes: Optional[str] = None
+
+
 class ScheduleCreate(BaseModel):
     employee_id: str
     date: str
@@ -1921,10 +1951,20 @@ class PayrollResponse(BaseModel):
     notes: Optional[str] = None
     created_at: datetime
 
+class PayrollReviewOverrideRow(BaseModel):
+    employee_id: str
+    bonus: float = 0
+    deductions: float = 0
+    tax: float = 0
+    insurance_deduction: float = 0
+    pension_deduction: float = 0
+    benefits_deduction: float = 0
+
 class PayrollReviewRequest(BaseModel):
     pay_period_start: str
     pay_period_end: str
     send_paystubs: bool = False
+    rows: List[PayrollReviewOverrideRow] = Field(default_factory=list)
 
 class PayrollReviewRow(BaseModel):
     employee_id: str
@@ -5001,7 +5041,7 @@ async def review_payroll_run(payload: PayrollReviewRequest, current_user: dict =
     if not company_id:
         raise HTTPException(status_code=400, detail="Company workspace not found")
 
-    review = await build_payroll_review(company_id, payload.pay_period_start, payload.pay_period_end)
+    review = await build_payroll_review(company_id, payload.pay_period_start, payload.pay_period_end, payload.rows)
     await log_activity(
         current_user["id"],
         "payroll_reviewed",
@@ -5022,7 +5062,7 @@ async def payroll_review_pdf(payload: PayrollReviewRequest, current_user: dict =
     if not company_id:
         raise HTTPException(status_code=400, detail="Company workspace not found")
 
-    review = await build_payroll_review(company_id, payload.pay_period_start, payload.pay_period_end)
+    review = await build_payroll_review(company_id, payload.pay_period_start, payload.pay_period_end, payload.rows)
     pdf_bytes = make_payroll_review_pdf(review)
     filename = f"payroll_review_{payload.pay_period_start}_{payload.pay_period_end}.pdf"
 
@@ -5039,7 +5079,7 @@ async def run_payroll(payload: PayrollReviewRequest, current_user: dict = Depend
     if not company_id:
         raise HTTPException(status_code=400, detail="Company workspace not found")
 
-    review = await build_payroll_review(company_id, payload.pay_period_start, payload.pay_period_end)
+    review = await build_payroll_review(company_id, payload.pay_period_start, payload.pay_period_end, payload.rows)
     if not review.rows:
         raise HTTPException(status_code=400, detail="No payable attendance found for the selected payroll period")
 
@@ -6837,40 +6877,59 @@ async def auto_clock_out_midnight(background_tasks: BackgroundTasks, current_use
 @api_router.put("/attendance/{attendance_id}/adjust")
 async def adjust_attendance(
     attendance_id: str,
-    clock_in: Optional[str] = None,
-    clock_out: Optional[str] = None,
-    notes: Optional[str] = None,
+    payload: AttendanceAdjustRequest,
     current_user: dict = Depends(require_admin)
 ):
     """Allow HR to adjust attendance records (for missed clock-outs, corrections, etc.)"""
-    record = await db.attendance.find_one({"id": attendance_id})
+    company_id = await get_current_company_id(current_user)
+    record = await db.attendance.find_one({"id": attendance_id, "company_id": company_id})
     if not record:
         raise HTTPException(status_code=404, detail="Attendance record not found")
     
     update_data = {"updated_at": datetime.utcnow(), "adjusted_by": current_user["id"]}
-    
-    if clock_in:
-        update_data["clock_in"] = clock_in
-    if clock_out:
-        update_data["clock_out"] = clock_out
-    if notes:
-        update_data["notes"] = notes
-    
-    # Recalculate total hours if both clock_in and clock_out are available
-    final_clock_in = clock_in or record.get("clock_in")
-    final_clock_out = clock_out or record.get("clock_out")
-    
+
+    timezone_name = record.get("timezone")
+    final_clock_in = record.get("clock_in")
+    final_clock_out = record.get("clock_out")
+
+    if payload.clock_in:
+        adjusted_clock_in, adjusted_clock_in_local = build_attendance_adjusted_times(record["date"], payload.clock_in, timezone_name)
+        update_data["clock_in"] = adjusted_clock_in
+        update_data["clock_in_local"] = adjusted_clock_in_local
+        update_data["actual_clock_in"] = adjusted_clock_in_local
+        final_clock_in = adjusted_clock_in
+
+    if payload.clock_out:
+        adjusted_clock_out, adjusted_clock_out_local = build_attendance_adjusted_times(record["date"], payload.clock_out, timezone_name)
+        update_data["clock_out"] = adjusted_clock_out
+        update_data["clock_out_local"] = adjusted_clock_out_local
+        update_data["actual_clock_out"] = adjusted_clock_out_local
+        final_clock_out = adjusted_clock_out
+
+    if payload.notes is not None:
+        update_data["notes"] = payload.notes
+
+    lateness = calculate_lateness(record["date"], record.get("scheduled_start_time"), final_clock_in)
+    update_data["late_status"] = lateness["late_status"]
+    update_data["minutes_late"] = lateness["minutes_late"]
+    update_data["status"] = "late" if lateness["late_status"] else ("present" if final_clock_in else record.get("status", "present"))
+
     if final_clock_in and final_clock_out:
         try:
             ci = datetime.fromisoformat(final_clock_in) if isinstance(final_clock_in, str) else final_clock_in
             co = datetime.fromisoformat(final_clock_out) if isinstance(final_clock_out, str) else final_clock_out
             update_data["total_hours"] = round((co - ci).total_seconds() / 3600, 2)
-        except:
+        except Exception:
             pass
-    
+    elif payload.clock_out == "":
+        update_data["clock_out"] = None
+        update_data["clock_out_local"] = None
+        update_data["actual_clock_out"] = None
+        update_data["total_hours"] = None
+      
     await db.attendance.update_one({"id": attendance_id}, {"$set": update_data})
     await log_activity(current_user["id"], "adjust_attendance", f"Adjusted attendance record {attendance_id}")
-    
+      
     return {"message": "Attendance record adjusted successfully"}
 
 # ===== Role-based Dashboard Stats =====
