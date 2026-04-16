@@ -100,7 +100,7 @@ def get_mail_settings() -> dict:
     smtp_port = int(os.environ.get("SMTP_PORT", "465") or "465")
     smtp_username = os.environ.get("SMTP_USERNAME", "").strip()
     smtp_password = os.environ.get("SMTP_PASSWORD", "").strip()
-    from_email = os.environ.get("SMTP_FROM_EMAIL", smtp_username or "info@emplora.org").strip()
+    from_email = os.environ.get("SMTP_FROM_EMAIL", smtp_username or "support@emplora.org").strip()
     from_name = os.environ.get("SMTP_FROM_NAME", "Emplora").strip() or "Emplora"
     use_ssl = str(os.environ.get("SMTP_USE_SSL", "true")).strip().lower() not in {"0", "false", "no"}
     use_starttls = str(os.environ.get("SMTP_USE_STARTTLS", "false")).strip().lower() in {"1", "true", "yes"}
@@ -122,7 +122,7 @@ def email_delivery_enabled() -> bool:
 def build_hr_welcome_email(first_name: str, company_name: str) -> Dict[str, str]:
     web_base_url = os.environ.get("WEB_APP_URL", "https://www.emplora.org").rstrip("/")
     login_url = os.environ.get("WEB_LOGIN_URL", f"{web_base_url}/login").strip()
-    support_email = os.environ.get("SUPPORT_EMAIL", "info@emplora.org").strip()
+    support_email = os.environ.get("SUPPORT_EMAIL", "support@emplora.org").strip()
     mobile_note = os.environ.get(
         "MOBILE_APP_NOTE",
         "Employees and managers can use the Emplora mobile app after you create their accounts from inside your HR workspace.",
@@ -262,7 +262,7 @@ def send_hr_welcome_email(recipient_email: str, first_name: str, company_name: s
 
 
 def send_contact_email(payload: ContactRequest) -> None:
-    support_email = os.environ.get("SUPPORT_EMAIL", "info@emplora.org").strip() or "info@emplora.org"
+    support_email = os.environ.get("SUPPORT_EMAIL", "support@emplora.org").strip() or "support@emplora.org"
     employee_range = payload.employees or "Not provided"
     phone = payload.phone or "Not provided"
     message = payload.message or "No message provided."
@@ -2538,7 +2538,7 @@ async def contact_us(payload: ContactRequest):
 
     return {
         "message": "Contact request sent successfully",
-        "sent_to": os.environ.get("SUPPORT_EMAIL", "info@emplora.org").strip() or "info@emplora.org",
+        "sent_to": os.environ.get("SUPPORT_EMAIL", "support@emplora.org").strip() or "support@emplora.org",
     }
 
 @api_router.post("/auth/login", response_model=TokenResponse)

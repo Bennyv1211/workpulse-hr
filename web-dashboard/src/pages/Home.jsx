@@ -58,7 +58,7 @@ export default function Home() {
       })
     } catch (error) {
       console.error('Error submitting form:', error)
-      alert(error.response?.data?.detail || 'Unable to send your message right now. Please email info@emplora.org directly.')
+      alert(error.response?.data?.detail || 'Unable to send your message right now. Please email support@emplora.org directly.')
     } finally {
       setIsSubmitting(false)
     }
@@ -399,7 +399,7 @@ export default function Home() {
                     <CheckCircle className="w-8 h-8 text-green-600" />
                   </div>
                   <h3 className="text-2xl font-bold text-gray-900 mb-2">Thank You!</h3>
-                  <p className="text-gray-600 mb-6">We have your message at info@emplora.org and will reach out within 24 hours.</p>
+                  <p className="text-gray-600 mb-6">We have your message at support@emplora.org and will reach out within 24 hours.</p>
                   <button onClick={() => setSubmitSuccess(false)} className="text-primary-600 font-medium hover:text-primary-700">
                     Send another message
                   </button>
@@ -407,7 +407,7 @@ export default function Home() {
               ) : (
                 <form onSubmit={handleSubmit}>
                   <h3 className="text-2xl font-bold text-gray-900 mb-6">Contact Us</h3>
-                  <p className="text-sm text-gray-500 mb-5">This form sends directly to <span className="font-semibold text-gray-700">info@emplora.org</span>.</p>
+                  <p className="text-sm text-gray-500 mb-5">This form sends directly to <span className="font-semibold text-gray-700">support@emplora.org</span>.</p>
                   <div className="space-y-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Business Name *</label>
