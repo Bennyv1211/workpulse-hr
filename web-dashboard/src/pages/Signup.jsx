@@ -23,8 +23,15 @@ export default function Signup() {
   const [error, setError] = useState('')
 
   useEffect(() => {
+    const container = document.getElementById('signup-hcaptcha')
+    if (container) {
+      container.innerHTML = ''
+    }
+
     const existingScript = document.querySelector('script[data-web3forms-hcaptcha="true"]')
-    if (existingScript) return
+    if (existingScript) {
+      existingScript.remove()
+    }
 
     const script = document.createElement('script')
     script.src = 'https://web3forms.com/client/script.js'
@@ -32,6 +39,12 @@ export default function Signup() {
     script.defer = true
     script.setAttribute('data-web3forms-hcaptcha', 'true')
     document.body.appendChild(script)
+
+    return () => {
+      if (container) {
+        container.innerHTML = ''
+      }
+    }
   }, [])
 
   const handleChange = (field) => (event) => {
@@ -78,17 +91,6 @@ export default function Signup() {
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_#0f172a,_#1d4ed8_45%,_#38bdf8)] p-3 sm:p-4">
       <div className="w-full max-w-6xl mx-auto rounded-[2rem] overflow-hidden shadow-2xl border border-white/15 bg-white">
-        <div className="flex items-center justify-between px-6 py-5 border-b border-slate-200/80 bg-white/95 backdrop-blur">
-          <Link
-            to="/"
-            className="inline-flex items-center gap-2 text-sm font-semibold text-slate-500 hover:text-primary-600"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            Back to Home
-          </Link>
-          <img src="/emplora-wordmark.svg" alt="Emplora" className="h-9 w-auto" />
-        </div>
-
         <div className="grid lg:grid-cols-[1.1fr_0.9fr]">
           <div className="flex flex-col p-6 sm:p-8 lg:p-10 bg-slate-950 text-white">
             <div className="flex-1 flex flex-col">
@@ -138,6 +140,14 @@ export default function Signup() {
           </div>
 
           <div className="p-6 sm:p-8 lg:p-10">
+            <Link
+              to="/"
+              className="inline-flex items-center gap-2 text-sm font-semibold text-slate-500 hover:text-primary-600 mb-6"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Back to Home
+            </Link>
+
             <div className="text-center lg:text-left mb-8">
               <img src="/emplora-wordmark.svg" alt="Emplora" className="h-12 mx-auto lg:mx-0 mb-4" />
               <p className="text-gray-500 mt-1">Create an HR admin account for your company workspace.</p>
@@ -225,9 +235,11 @@ export default function Signup() {
 
               <div className="flex flex-col gap-2">
                 <div
+                  id="signup-hcaptcha"
                   className="h-captcha"
                   data-captcha="true"
                   data-theme="light"
+                  style={{ minHeight: '78px' }}
                 ></div>
                 {captchaError && (
                   <p className="text-sm font-medium text-red-600">{captchaError}</p>
