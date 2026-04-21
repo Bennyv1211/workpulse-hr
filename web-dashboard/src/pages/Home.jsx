@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Clock,
@@ -34,6 +34,23 @@ export default function Home() {
   })
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submitSuccess, setSubmitSuccess] = useState(false)
+  const [captchaError, setCaptchaError] = useState('')
+
+  useEffect(() => {
+    const existingScript = document.querySelector('script[data-web3forms-hcaptcha="true"]')
+    if (existingScript) return
+
+    const script = document.createElement('script')
+    script.src = 'https://web3forms.com/client/script.js'
+    script.async = true
+    script.defer = true
+    script.setAttribute('data-web3forms-hcaptcha', 'true')
+    document.body.appendChild(script)
+
+    return () => {
+      // Keep the script in place once loaded so hash-route navigation doesn't keep re-injecting it.
+    }
+  }, [])
 
   const scrollToSection = (sectionId) => {
     const element = document.getElementById(sectionId)
@@ -47,8 +64,17 @@ export default function Home() {
 
   const handleSubmit = async (event) => {
     event.preventDefault()
+    setCaptchaError('')
     setIsSubmitting(true)
     try {
+      const captchaToken = document.querySelector('textarea[name="h-captcha-response"]')?.value
+
+      if (!captchaToken) {
+        setCaptchaError('Please complete the captcha before sending your message.')
+        setIsSubmitting(false)
+        return
+      }
+
       const response = await fetch('https://api.web3forms.com/submit', {
         method: 'POST',
         headers: {
@@ -67,6 +93,7 @@ export default function Home() {
           phone: formData.phone || 'Not provided',
           employees: formData.employees || 'Not provided',
           message: formData.message || 'No message provided.',
+          'h-captcha-response': captchaToken,
         }),
       })
 
@@ -481,6 +508,16 @@ export default function Home() {
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Message</label>
                       <textarea rows={3} value={formData.message} onChange={(e) => setFormData({ ...formData, message: e.target.value })} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none resize-none" placeholder="Tell us how you want to use Emplora..." />
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <div
+                        className="h-captcha"
+                        data-captcha="true"
+                        data-theme="light"
+                      ></div>
+                      {captchaError && (
+                        <p className="text-sm font-medium text-red-600">{captchaError}</p>
+                      )}
                     </div>
                     <button type="submit" disabled={isSubmitting} className="w-full py-4 bg-primary-500 text-white rounded-xl font-semibold hover:bg-primary-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
                       {isSubmitting ? 'Sending...' : <>Contact Us <ArrowRight className="w-5 h-5" /></>}
