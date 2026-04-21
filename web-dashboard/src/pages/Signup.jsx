@@ -3,10 +3,13 @@ import { Link, useNavigate } from 'react-router-dom'
 import { Eye, EyeOff, Lock, Mail, User, ShieldCheck, Building2, ArrowLeft } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 
+const HCAPTCHA_SITE_KEY = '50b2fe65-b00b-4b9e-ad62-3ba471098be2'
+
 export default function Signup() {
   const { registerHr } = useAuth()
   const navigate = useNavigate()
   const [captchaError, setCaptchaError] = useState('')
+  const [captchaToken, setCaptchaToken] = useState('')
   const [form, setForm] = useState({
     first_name: '',
     last_name: '',
@@ -28,19 +31,53 @@ export default function Signup() {
       container.innerHTML = ''
     }
 
-    const existingScript = document.querySelector('script[data-web3forms-hcaptcha="true"]')
-    if (existingScript) {
-      existingScript.remove()
+    let poller = null
+
+    const renderCaptcha = () => {
+      if (!window.hcaptcha || !container) return
+
+      container.innerHTML = ''
+      window.hcaptcha.render(container, {
+        sitekey: HCAPTCHA_SITE_KEY,
+        theme: 'light',
+        callback: (token) => {
+          setCaptchaToken(token)
+          setCaptchaError('')
+        },
+        'expired-callback': () => setCaptchaToken(''),
+        'error-callback': () => {
+          setCaptchaToken('')
+          setCaptchaError('Captcha could not load correctly. Please refresh and try again.')
+        },
+      })
     }
 
-    const script = document.createElement('script')
-    script.src = 'https://web3forms.com/client/script.js'
-    script.async = true
-    script.defer = true
-    script.setAttribute('data-web3forms-hcaptcha', 'true')
-    document.body.appendChild(script)
+    const existingScript = document.getElementById('hcaptcha-script')
+    if (existingScript && window.hcaptcha) {
+      renderCaptcha()
+    } else {
+      poller = window.setInterval(() => {
+        if (window.hcaptcha) {
+          window.clearInterval(poller)
+          renderCaptcha()
+        }
+      }, 250)
+    }
+
+    if (!existingScript) {
+      const script = document.createElement('script')
+      script.id = 'hcaptcha-script'
+      script.src = 'https://js.hcaptcha.com/1/api.js?render=explicit'
+      script.async = true
+      script.defer = true
+      script.onload = renderCaptcha
+      document.body.appendChild(script)
+    }
 
     return () => {
+      if (poller) {
+        window.clearInterval(poller)
+      }
       if (container) {
         container.innerHTML = ''
       }
@@ -56,7 +93,6 @@ export default function Signup() {
     setError('')
     setCaptchaError('')
 
-    const captchaToken = document.querySelector('textarea[name="h-captcha-response"]')?.value
     if (!captchaToken) {
       setCaptchaError('Please complete the captcha before creating your HR account.')
       return

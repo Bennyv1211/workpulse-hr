@@ -21,6 +21,8 @@ import {
   FileText
 } from 'lucide-react'
 
+const HCAPTCHA_SITE_KEY = '50b2fe65-b00b-4b9e-ad62-3ba471098be2'
+
 export default function Home() {
   const navigate = useNavigate()
   const WEB3FORMS_ACCESS_KEY = '5e0edb0e-a3a0-4ff3-ba41-6bda36069668'
@@ -35,20 +37,64 @@ export default function Home() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submitSuccess, setSubmitSuccess] = useState(false)
   const [captchaError, setCaptchaError] = useState('')
+  const [captchaToken, setCaptchaToken] = useState('')
 
   useEffect(() => {
-    const existingScript = document.querySelector('script[data-web3forms-hcaptcha="true"]')
-    if (existingScript) return
+    const container = document.getElementById('contact-hcaptcha')
+    if (container) {
+      container.innerHTML = ''
+    }
 
-    const script = document.createElement('script')
-    script.src = 'https://web3forms.com/client/script.js'
-    script.async = true
-    script.defer = true
-    script.setAttribute('data-web3forms-hcaptcha', 'true')
-    document.body.appendChild(script)
+    let poller = null
+
+    const renderCaptcha = () => {
+      if (!window.hcaptcha || !container) return
+
+      container.innerHTML = ''
+      window.hcaptcha.render(container, {
+        sitekey: HCAPTCHA_SITE_KEY,
+        theme: 'light',
+        callback: (token) => {
+          setCaptchaToken(token)
+          setCaptchaError('')
+        },
+        'expired-callback': () => setCaptchaToken(''),
+        'error-callback': () => {
+          setCaptchaToken('')
+          setCaptchaError('Captcha could not load correctly. Please refresh and try again.')
+        },
+      })
+    }
+
+    const existingScript = document.getElementById('hcaptcha-script')
+    if (existingScript && window.hcaptcha) {
+      renderCaptcha()
+    } else {
+      poller = window.setInterval(() => {
+        if (window.hcaptcha) {
+          window.clearInterval(poller)
+          renderCaptcha()
+        }
+      }, 250)
+    }
+
+    if (!existingScript) {
+      const script = document.createElement('script')
+      script.id = 'hcaptcha-script'
+      script.src = 'https://js.hcaptcha.com/1/api.js?render=explicit'
+      script.async = true
+      script.defer = true
+      script.onload = renderCaptcha
+      document.body.appendChild(script)
+    }
 
     return () => {
-      // Keep the script in place once loaded so hash-route navigation doesn't keep re-injecting it.
+      if (poller) {
+        window.clearInterval(poller)
+      }
+      if (container) {
+        container.innerHTML = ''
+      }
     }
   }, [])
 
@@ -67,8 +113,6 @@ export default function Home() {
     setCaptchaError('')
     setIsSubmitting(true)
     try {
-      const captchaToken = document.querySelector('textarea[name="h-captcha-response"]')?.value
-
       if (!captchaToken) {
         setCaptchaError('Please complete the captcha before sending your message.')
         setIsSubmitting(false)
@@ -511,9 +555,11 @@ export default function Home() {
                     </div>
                     <div className="flex flex-col gap-2">
                       <div
+                        id="contact-hcaptcha"
                         className="h-captcha"
                         data-captcha="true"
                         data-theme="light"
+                        style={{ minHeight: '78px' }}
                       ></div>
                       {captchaError && (
                         <p className="text-sm font-medium text-red-600">{captchaError}</p>
