@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react'
+import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import HCaptcha from '@hcaptcha/react-hcaptcha'
 import {
   Clock,
   Users,
@@ -38,65 +39,6 @@ export default function Home() {
   const [submitSuccess, setSubmitSuccess] = useState(false)
   const [captchaError, setCaptchaError] = useState('')
   const [captchaToken, setCaptchaToken] = useState('')
-
-  useEffect(() => {
-    const container = document.getElementById('contact-hcaptcha')
-    if (container) {
-      container.innerHTML = ''
-    }
-
-    let poller = null
-
-    const renderCaptcha = () => {
-      if (!window.hcaptcha || !container) return
-
-      container.innerHTML = ''
-      window.hcaptcha.render(container, {
-        sitekey: HCAPTCHA_SITE_KEY,
-        theme: 'light',
-        callback: (token) => {
-          setCaptchaToken(token)
-          setCaptchaError('')
-        },
-        'expired-callback': () => setCaptchaToken(''),
-        'error-callback': () => {
-          setCaptchaToken('')
-          setCaptchaError('Captcha could not load correctly. Please refresh and try again.')
-        },
-      })
-    }
-
-    const existingScript = document.getElementById('hcaptcha-script')
-    if (existingScript && window.hcaptcha) {
-      renderCaptcha()
-    } else {
-      poller = window.setInterval(() => {
-        if (window.hcaptcha) {
-          window.clearInterval(poller)
-          renderCaptcha()
-        }
-      }, 250)
-    }
-
-    if (!existingScript) {
-      const script = document.createElement('script')
-      script.id = 'hcaptcha-script'
-      script.src = 'https://js.hcaptcha.com/1/api.js?render=explicit'
-      script.async = true
-      script.defer = true
-      script.onload = renderCaptcha
-      document.body.appendChild(script)
-    }
-
-    return () => {
-      if (poller) {
-        window.clearInterval(poller)
-      }
-      if (container) {
-        container.innerHTML = ''
-      }
-    }
-  }, [])
 
   const scrollToSection = (sectionId) => {
     const element = document.getElementById(sectionId)
@@ -554,13 +496,19 @@ export default function Home() {
                       <textarea rows={3} value={formData.message} onChange={(e) => setFormData({ ...formData, message: e.target.value })} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none resize-none" placeholder="Tell us how you want to use Emplora..." />
                     </div>
                     <div className="flex flex-col gap-2">
-                      <div
-                        id="contact-hcaptcha"
-                        className="h-captcha"
-                        data-captcha="true"
-                        data-theme="light"
-                        style={{ minHeight: '78px' }}
-                      ></div>
+                      <HCaptcha
+                        sitekey={HCAPTCHA_SITE_KEY}
+                        reCaptchaCompat={false}
+                        onVerify={(token) => {
+                          setCaptchaToken(token)
+                          setCaptchaError('')
+                        }}
+                        onExpire={() => setCaptchaToken('')}
+                        onError={() => {
+                          setCaptchaToken('')
+                          setCaptchaError('Captcha could not load correctly. Please refresh and try again.')
+                        }}
+                      />
                       {captchaError && (
                         <p className="text-sm font-medium text-red-600">{captchaError}</p>
                       )}

@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react'
+import React, { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Eye, EyeOff, Lock, Mail, User, ShieldCheck, Building2, ArrowLeft } from 'lucide-react'
+import HCaptcha from '@hcaptcha/react-hcaptcha'
 import { useAuth } from '../contexts/AuthContext'
 
 const HCAPTCHA_SITE_KEY = '50b2fe65-b00b-4b9e-ad62-3ba471098be2'
@@ -24,65 +25,6 @@ export default function Signup() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-
-  useEffect(() => {
-    const container = document.getElementById('signup-hcaptcha')
-    if (container) {
-      container.innerHTML = ''
-    }
-
-    let poller = null
-
-    const renderCaptcha = () => {
-      if (!window.hcaptcha || !container) return
-
-      container.innerHTML = ''
-      window.hcaptcha.render(container, {
-        sitekey: HCAPTCHA_SITE_KEY,
-        theme: 'light',
-        callback: (token) => {
-          setCaptchaToken(token)
-          setCaptchaError('')
-        },
-        'expired-callback': () => setCaptchaToken(''),
-        'error-callback': () => {
-          setCaptchaToken('')
-          setCaptchaError('Captcha could not load correctly. Please refresh and try again.')
-        },
-      })
-    }
-
-    const existingScript = document.getElementById('hcaptcha-script')
-    if (existingScript && window.hcaptcha) {
-      renderCaptcha()
-    } else {
-      poller = window.setInterval(() => {
-        if (window.hcaptcha) {
-          window.clearInterval(poller)
-          renderCaptcha()
-        }
-      }, 250)
-    }
-
-    if (!existingScript) {
-      const script = document.createElement('script')
-      script.id = 'hcaptcha-script'
-      script.src = 'https://js.hcaptcha.com/1/api.js?render=explicit'
-      script.async = true
-      script.defer = true
-      script.onload = renderCaptcha
-      document.body.appendChild(script)
-    }
-
-    return () => {
-      if (poller) {
-        window.clearInterval(poller)
-      }
-      if (container) {
-        container.innerHTML = ''
-      }
-    }
-  }, [])
 
   const handleChange = (field) => (event) => {
     setForm((current) => ({ ...current, [field]: event.target.value }))
@@ -270,13 +212,19 @@ export default function Signup() {
               </label>
 
               <div className="flex flex-col gap-2">
-                <div
-                  id="signup-hcaptcha"
-                  className="h-captcha"
-                  data-captcha="true"
-                  data-theme="light"
-                  style={{ minHeight: '78px' }}
-                ></div>
+                <HCaptcha
+                  sitekey={HCAPTCHA_SITE_KEY}
+                  reCaptchaCompat={false}
+                  onVerify={(token) => {
+                    setCaptchaToken(token)
+                    setCaptchaError('')
+                  }}
+                  onExpire={() => setCaptchaToken('')}
+                  onError={() => {
+                    setCaptchaToken('')
+                    setCaptchaError('Captcha could not load correctly. Please refresh and try again.')
+                  }}
+                />
                 {captchaError && (
                   <p className="text-sm font-medium text-red-600">{captchaError}</p>
                 )}
