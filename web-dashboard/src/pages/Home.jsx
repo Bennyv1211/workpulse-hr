@@ -49,14 +49,19 @@ export default function Home() {
     event.preventDefault()
     setIsSubmitting(true)
     try {
-      await api.post('/contact', {
-        business_name: formData.businessName,
-        contact_name: formData.contactName,
-        email: formData.email,
-        phone: formData.phone,
-        employees: formData.employees,
-        message: formData.message,
-      })
+      const subject = `Emplora contact request from ${formData.businessName}`
+      const body = [
+        `Business Name: ${formData.businessName}`,
+        `Contact Name: ${formData.contactName}`,
+        `Email: ${formData.email}`,
+        `Phone: ${formData.phone || 'Not provided'}`,
+        `Number of Employees: ${formData.employees || 'Not provided'}`,
+        '',
+        'Message:',
+        formData.message || 'No message provided.',
+      ].join('\n')
+
+      window.location.href = `mailto:support@emplora.org?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
       setSubmitSuccess(true)
       setFormData({
         businessName: '',
