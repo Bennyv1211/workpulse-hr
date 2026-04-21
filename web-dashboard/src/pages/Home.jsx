@@ -1,6 +1,5 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import api from '../lib/api'
 import {
   Clock,
   Users,
@@ -24,6 +23,7 @@ import {
 
 export default function Home() {
   const navigate = useNavigate()
+  const WEB3FORMS_ACCESS_KEY = '5e0edb0e-a3a0-4ff3-ba41-6bda36069668'
   const [formData, setFormData] = useState({
     businessName: '',
     contactName: '',
@@ -49,19 +49,32 @@ export default function Home() {
     event.preventDefault()
     setIsSubmitting(true)
     try {
-      const subject = `Emplora contact request from ${formData.businessName}`
-      const body = [
-        `Business Name: ${formData.businessName}`,
-        `Contact Name: ${formData.contactName}`,
-        `Email: ${formData.email}`,
-        `Phone: ${formData.phone || 'Not provided'}`,
-        `Number of Employees: ${formData.employees || 'Not provided'}`,
-        '',
-        'Message:',
-        formData.message || 'No message provided.',
-      ].join('\n')
+      const response = await fetch('https://api.web3forms.com/submit', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          access_key: WEB3FORMS_ACCESS_KEY,
+          subject: `Emplora contact request from ${formData.businessName}`,
+          from_name: 'Emplora Website',
+          to_name: 'Emplora Support',
+          replyto: formData.email,
+          business_name: formData.businessName,
+          contact_name: formData.contactName,
+          email: formData.email,
+          phone: formData.phone || 'Not provided',
+          employees: formData.employees || 'Not provided',
+          message: formData.message || 'No message provided.',
+        }),
+      })
 
-      window.location.href = `mailto:support@emplora.org?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
+      const data = await response.json()
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || 'Unable to send your message right now.')
+      }
+
       setSubmitSuccess(true)
       setFormData({
         businessName: '',
@@ -73,7 +86,7 @@ export default function Home() {
       })
     } catch (error) {
       console.error('Error submitting form:', error)
-      alert(error.response?.data?.detail || 'Unable to send your message right now. Please email support@emplora.org directly.')
+      alert(error.message || 'Unable to send your message right now. Please email support@emplora.org directly.')
     } finally {
       setIsSubmitting(false)
     }
