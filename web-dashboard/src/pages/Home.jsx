@@ -35,6 +35,16 @@ export default function Home() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submitSuccess, setSubmitSuccess] = useState(false)
 
+  const scrollToSection = (sectionId) => {
+    const element = document.getElementById(sectionId)
+    if (!element) return
+
+    element.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    })
+  }
+
   const handleSubmit = async (event) => {
     event.preventDefault()
     setIsSubmitting(true)
@@ -58,7 +68,7 @@ export default function Home() {
       })
     } catch (error) {
       console.error('Error submitting form:', error)
-      alert(error.response?.data?.detail || 'Unable to send your message right now. Please email support@emplora.org directly.')
+      alert(error.response?.data?.detail || 'Unable to send your message right now. Please email support@emplora.com directly.')
     } finally {
       setIsSubmitting(false)
     }
@@ -155,10 +165,10 @@ export default function Home() {
               <img src="/emplora-wordmark.svg" alt="Emplora" className="h-8 w-auto" />
             </div>
             <div className="hidden md:flex items-center gap-8">
-              <a href="#features" className="text-gray-600 hover:text-gray-900 transition-colors">Features</a>
-              <a href="#benefits" className="text-gray-600 hover:text-gray-900 transition-colors">Benefits</a>
-              <a href="#testimonials" className="text-gray-600 hover:text-gray-900 transition-colors">Reviews</a>
-              <a href="#contact" className="text-gray-600 hover:text-gray-900 transition-colors">Contact</a>
+              <button onClick={() => scrollToSection('features')} className="text-gray-600 hover:text-gray-900 transition-colors">Features</button>
+              <button onClick={() => scrollToSection('benefits')} className="text-gray-600 hover:text-gray-900 transition-colors">Benefits</button>
+              <button onClick={() => scrollToSection('testimonials')} className="text-gray-600 hover:text-gray-900 transition-colors">Reviews</button>
+              <button onClick={() => scrollToSection('contact')} className="text-gray-600 hover:text-gray-900 transition-colors">Contact</button>
             </div>
             <div className="flex items-center gap-3">
               <button onClick={() => navigate('/login')} className="px-4 py-2 text-gray-700 hover:text-gray-900 font-medium transition-colors">
@@ -192,10 +202,10 @@ export default function Home() {
                   Create HR Account
                   <ArrowRight className="w-5 h-5" />
                 </button>
-                <a href="#contact" className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-white text-gray-700 rounded-xl font-semibold hover:bg-gray-50 transition-all border border-gray-200">
+                <button onClick={() => scrollToSection('contact')} className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-white text-gray-700 rounded-xl font-semibold hover:bg-gray-50 transition-all border border-gray-200">
                   <Play className="w-5 h-5 text-primary-500" />
                   Contact Us
-                </a>
+                </button>
               </div>
             </div>
             <div className="relative">
@@ -399,7 +409,7 @@ export default function Home() {
                     <CheckCircle className="w-8 h-8 text-green-600" />
                   </div>
                   <h3 className="text-2xl font-bold text-gray-900 mb-2">Thank You!</h3>
-                  <p className="text-gray-600 mb-6">We have your message at support@emplora.org and will reach out within 24 hours.</p>
+                  <p className="text-gray-600 mb-6">We have your message at support@emplora.com and will reach out within 24 hours.</p>
                   <button onClick={() => setSubmitSuccess(false)} className="text-primary-600 font-medium hover:text-primary-700">
                     Send another message
                   </button>
@@ -407,7 +417,7 @@ export default function Home() {
               ) : (
                 <form onSubmit={handleSubmit}>
                   <h3 className="text-2xl font-bold text-gray-900 mb-6">Contact Us</h3>
-                  <p className="text-sm text-gray-500 mb-5">This form sends directly to <span className="font-semibold text-gray-700">support@emplora.org</span>.</p>
+                  <p className="text-sm text-gray-500 mb-5">This form sends directly to <span className="font-semibold text-gray-700">support@emplora.com</span>.</p>
                   <div className="space-y-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Business Name *</label>
@@ -477,16 +487,16 @@ export default function Home() {
             <div>
               <h4 className="text-white font-semibold mb-4">Product</h4>
               <ul className="space-y-2">
-                <li><a href="#features" className="text-gray-400 hover:text-white transition-colors">Features</a></li>
-                <li><a href="#benefits" className="text-gray-400 hover:text-white transition-colors">Benefits</a></li>
-                <li><a href="#testimonials" className="text-gray-400 hover:text-white transition-colors">Reviews</a></li>
+                <li><button onClick={() => scrollToSection('features')} className="text-gray-400 hover:text-white transition-colors">Features</button></li>
+                <li><button onClick={() => scrollToSection('benefits')} className="text-gray-400 hover:text-white transition-colors">Benefits</button></li>
+                <li><button onClick={() => scrollToSection('testimonials')} className="text-gray-400 hover:text-white transition-colors">Reviews</button></li>
                 <li><button onClick={() => navigate('/login')} className="text-gray-400 hover:text-white transition-colors">Sign In</button></li>
               </ul>
             </div>
             <div>
               <h4 className="text-white font-semibold mb-4">Company</h4>
               <ul className="space-y-2">
-                <li><a href="#contact" className="text-gray-400 hover:text-white transition-colors">Contact</a></li>
+                <li><button onClick={() => scrollToSection('contact')} className="text-gray-400 hover:text-white transition-colors">Contact</button></li>
                 <li><button onClick={() => navigate('/signup')} className="text-gray-400 hover:text-white transition-colors">Create HR Account</button></li>
               </ul>
             </div>
