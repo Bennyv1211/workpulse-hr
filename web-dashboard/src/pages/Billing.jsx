@@ -50,7 +50,10 @@ export default function Billing() {
       const response = await api.get('/billing/subscription')
       return response.data
     },
-    refetchInterval: data && !hasActiveSubscription(data?.subscription_status) ? 10000 : false,
+    refetchInterval: (query) => {
+      const currentBilling = query.state.data
+      return hasActiveSubscription(currentBilling?.subscription_status) ? false : 10000
+    },
   })
 
   const handleCheckout = async (plan) => {
