@@ -47,7 +47,7 @@ export default function Home() {
     {
       name: 'Starter',
       subtitle: 'For small teams getting organized fast',
-      price: '$29',
+      price: '$79',
       cadence: '/month',
       path: 'emplora-starter-monthly',
       employees: '1-10 employees',
@@ -64,7 +64,7 @@ export default function Home() {
     {
       name: 'Growth',
       subtitle: 'For growing teams running HR properly',
-      price: '$79',
+      price: '$199',
       cadence: '/month',
       path: 'emplora-growth-monthly',
       employees: '11-50 employees',
@@ -81,7 +81,7 @@ export default function Home() {
     {
       name: 'Scale',
       subtitle: 'For serious operations with bigger headcount',
-      price: '$199',
+      price: '$299',
       cadence: '/month',
       path: 'emplora-scale-monthly',
       employees: '51-200 employees',
