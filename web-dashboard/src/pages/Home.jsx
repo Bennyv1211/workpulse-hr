@@ -40,6 +40,60 @@ export default function Home() {
   const [captchaError, setCaptchaError] = useState('')
   const [captchaToken, setCaptchaToken] = useState('')
 
+  const pricingPlans = [
+    {
+      name: 'Starter',
+      subtitle: 'For small teams getting organized fast',
+      price: '$29',
+      cadence: '/month',
+      path: 'emplora-starter-monthly',
+      employees: '1-10 employees',
+      accent: 'from-sky-500 to-primary-500',
+      buttonStyle: 'bg-white text-primary-600 hover:bg-primary-50',
+      featured: false,
+      features: [
+        'Employee records and departments',
+        'Clock-ins, breaks, and attendance',
+        'Leave requests and balance tracking',
+        'Payroll review and paystub delivery',
+      ],
+    },
+    {
+      name: 'Growth',
+      subtitle: 'For growing teams running HR properly',
+      price: '$79',
+      cadence: '/month',
+      path: 'emplora-growth-monthly',
+      employees: '11-50 employees',
+      accent: 'from-primary-500 to-cyan-500',
+      buttonStyle: 'bg-gray-900 text-white hover:bg-black',
+      featured: true,
+      features: [
+        'Everything in Starter',
+        'Manager dashboards and approvals',
+        'Excel import and bulk onboarding',
+        'Exports, reports, and backup tools',
+      ],
+    },
+    {
+      name: 'Scale',
+      subtitle: 'For serious operations with bigger headcount',
+      price: '$199',
+      cadence: '/month',
+      path: 'emplora-scale-monthly',
+      employees: '51-200 employees',
+      accent: 'from-emerald-500 to-teal-500',
+      buttonStyle: 'bg-white text-emerald-700 hover:bg-emerald-50',
+      featured: false,
+      features: [
+        'Everything in Growth',
+        'Larger workforce support',
+        'Deeper payroll oversight',
+        'Priority operational visibility',
+      ],
+    },
+  ]
+
   const scrollToSection = (sectionId) => {
     const element = document.getElementById(sectionId)
     if (!element) return
@@ -103,6 +157,27 @@ export default function Home() {
     } finally {
       setIsSubmitting(false)
     }
+  }
+
+  const openFastSpringCheckout = (productPath) => {
+    const fastspringBuilder = window.fastspring?.builder
+
+    if (!fastspringBuilder) {
+      alert('FastSpring checkout is still loading. Please wait a moment and try again.')
+      return
+    }
+
+    fastspringBuilder.push({
+      reset: true,
+      products: [
+        {
+          path: productPath,
+          quantity: 1,
+        },
+      ],
+    })
+
+    fastspringBuilder.checkout()
   }
 
   const features = [
@@ -197,6 +272,7 @@ export default function Home() {
             </div>
             <div className="hidden md:flex items-center gap-8">
               <button onClick={() => scrollToSection('features')} className="text-gray-600 hover:text-gray-900 transition-colors">Features</button>
+              <button onClick={() => scrollToSection('pricing')} className="text-gray-600 hover:text-gray-900 transition-colors">Pricing</button>
               <button onClick={() => scrollToSection('benefits')} className="text-gray-600 hover:text-gray-900 transition-colors">Benefits</button>
               <button onClick={() => scrollToSection('testimonials')} className="text-gray-600 hover:text-gray-900 transition-colors">Reviews</button>
               <button onClick={() => scrollToSection('contact')} className="text-gray-600 hover:text-gray-900 transition-colors">Contact</button>
@@ -232,6 +308,9 @@ export default function Home() {
                 <button onClick={() => navigate('/signup')} className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-primary-500 text-white rounded-xl font-semibold hover:bg-primary-600 transition-all shadow-xl shadow-primary-500/30 hover:-translate-y-0.5">
                   Create HR Account
                   <ArrowRight className="w-5 h-5" />
+                </button>
+                <button onClick={() => scrollToSection('pricing')} className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-gray-900 text-white rounded-xl font-semibold hover:bg-black transition-all">
+                  View Plans
                 </button>
                 <button onClick={() => scrollToSection('contact')} className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-white text-gray-700 rounded-xl font-semibold hover:bg-gray-50 transition-all border border-gray-200">
                   <Play className="w-5 h-5 text-primary-500" />
@@ -355,6 +434,69 @@ export default function Home() {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="pricing" className="py-24 bg-gray-950">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="text-center mb-16">
+            <p className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/10 text-primary-100 text-sm font-semibold mb-5">
+              Subscription Plans
+            </p>
+            <h2 className="text-4xl font-bold text-white mb-4">
+              Choose the Emplora plan that fits your workforce size
+            </h2>
+            <p className="text-lg text-gray-300 max-w-3xl mx-auto">
+              Start with the right employee range today and scale up as your company grows. All plans are billed monthly and open inside the branded Emplora checkout.
+            </p>
+          </div>
+
+          <div className="grid lg:grid-cols-3 gap-8">
+            {pricingPlans.map((plan) => (
+              <div
+                key={plan.path}
+                className={`relative rounded-3xl border p-8 shadow-2xl transition-transform duration-300 hover:-translate-y-1 ${
+                  plan.featured
+                    ? 'border-primary-400 bg-white text-gray-900'
+                    : 'border-white/10 bg-white/5 text-white backdrop-blur-sm'
+                }`}
+              >
+                {plan.featured && (
+                  <div className="absolute -top-4 left-8 rounded-full bg-gradient-to-r from-primary-500 to-cyan-500 px-4 py-2 text-xs font-bold uppercase tracking-[0.2em] text-white shadow-lg">
+                    Most Popular
+                  </div>
+                )}
+
+                <div className={`inline-flex rounded-2xl bg-gradient-to-r ${plan.accent} px-4 py-2 text-sm font-semibold text-white shadow-lg`}>
+                  {plan.employees}
+                </div>
+                <h3 className={`mt-6 text-3xl font-bold ${plan.featured ? 'text-gray-900' : 'text-white'}`}>{plan.name}</h3>
+                <p className={`mt-3 text-sm leading-6 ${plan.featured ? 'text-gray-600' : 'text-gray-300'}`}>{plan.subtitle}</p>
+
+                <div className="mt-8 flex items-end gap-2">
+                  <span className={`text-5xl font-bold ${plan.featured ? 'text-gray-900' : 'text-white'}`}>{plan.price}</span>
+                  <span className={`pb-2 text-base ${plan.featured ? 'text-gray-500' : 'text-gray-300'}`}>{plan.cadence}</span>
+                </div>
+
+                <div className="mt-8 space-y-4">
+                  {plan.features.map((feature) => (
+                    <div key={feature} className="flex items-start gap-3">
+                      <CheckCircle className={`mt-0.5 h-5 w-5 flex-shrink-0 ${plan.featured ? 'text-primary-500' : 'text-emerald-400'}`} />
+                      <span className={`text-sm leading-6 ${plan.featured ? 'text-gray-700' : 'text-gray-200'}`}>{feature}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <button
+                  onClick={() => openFastSpringCheckout(plan.path)}
+                  className={`mt-10 inline-flex w-full items-center justify-center gap-2 rounded-2xl px-5 py-4 text-sm font-semibold transition-colors ${plan.buttonStyle}`}
+                >
+                  Start {plan.name}
+                  <ArrowRight className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
           </div>
         </div>
       </section>
@@ -537,6 +679,7 @@ export default function Home() {
               <h4 className="text-white font-semibold mb-4">Product</h4>
               <ul className="space-y-2">
                 <li><button onClick={() => scrollToSection('features')} className="text-gray-400 hover:text-white transition-colors">Features</button></li>
+                <li><button onClick={() => scrollToSection('pricing')} className="text-gray-400 hover:text-white transition-colors">Pricing</button></li>
                 <li><button onClick={() => scrollToSection('benefits')} className="text-gray-400 hover:text-white transition-colors">Benefits</button></li>
                 <li><button onClick={() => scrollToSection('testimonials')} className="text-gray-400 hover:text-white transition-colors">Reviews</button></li>
                 <li><button onClick={() => navigate('/login')} className="text-gray-400 hover:text-white transition-colors">Sign In</button></li>
