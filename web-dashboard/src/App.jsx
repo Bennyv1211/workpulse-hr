@@ -1,5 +1,5 @@
 import React from 'react'
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import Layout from './components/Layout'
 import Home from './pages/Home'
@@ -42,6 +42,7 @@ function PublicOnlyRoute({ children }) {
 
 function ProtectedRoute({ children, hrOnly = false, allowInactiveSubscription = false }) {
   const { user, loading } = useAuth()
+  const location = useLocation()
 
   if (loading) {
     return <FullPageSpinner />
@@ -55,7 +56,14 @@ function ProtectedRoute({ children, hrOnly = false, allowInactiveSubscription = 
     return <Navigate to="/dashboard" replace />
   }
 
-  if (isHrRole(user.role) && !hasActiveSubscription(user.subscription_status) && !allowInactiveSubscription) {
+  const isBillingRoute = location.pathname.startsWith('/dashboard/billing')
+
+  if (
+    isHrRole(user.role) &&
+    !hasActiveSubscription(user.subscription_status) &&
+    !allowInactiveSubscription &&
+    !isBillingRoute
+  ) {
     return <Navigate to="/dashboard/billing" replace />
   }
 
