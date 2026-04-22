@@ -58,7 +58,7 @@ export default function Signup() {
     setLoading(true)
     try {
       await registerHr(form)
-      navigate('/dashboard')
+      navigate('/dashboard/billing')
     } catch (err) {
       setError(err.response?.data?.detail || err.message || 'Unable to create HR account.')
     } finally {

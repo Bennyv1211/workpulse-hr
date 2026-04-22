@@ -17,7 +17,8 @@ import {
   Menu,
   X,
   Bell,
-  FileText
+  FileText,
+  CreditCard,
 } from 'lucide-react'
 
 export default function Layout() {
@@ -39,6 +40,7 @@ export default function Layout() {
         { name: 'Attendance', href: '/dashboard/attendance', icon: Clock },
         { name: 'Payroll', href: '/dashboard/payroll', icon: DollarSign },
         { name: 'Paystubs', href: '/dashboard/paystubs', icon: FileText },
+        { name: 'Billing', href: '/dashboard/billing', icon: CreditCard },
         { name: 'Reports', href: '/dashboard/reports', icon: BarChart3 },
         { name: 'Settings', href: '/dashboard/settings', icon: Settings },
       ]

@@ -14,9 +14,25 @@ export function canAccessWebDashboard(role) {
   return WEB_ALLOWED_ROLES.includes(role)
 }
 
+export function hasActiveSubscription(subscriptionStatus) {
+  return ['active', 'trial'].includes(subscriptionStatus)
+}
+
 export function getDashboardPathForRole(role) {
   if (canAccessWebDashboard(role)) {
     return '/dashboard'
   }
   return '/login'
+}
+
+export function getWebStartPath(user) {
+  if (!user || !canAccessWebDashboard(user.role)) {
+    return '/login'
+  }
+
+  if (isHrRole(user.role) && !hasActiveSubscription(user.subscription_status)) {
+    return '/dashboard/billing'
+  }
+
+  return '/dashboard'
 }

@@ -15,7 +15,8 @@ import Payroll from './pages/Payroll'
 import Paystubs from './pages/Paystubs'
 import Reports from './pages/Reports'
 import Settings from './pages/Settings'
-import { canAccessWebDashboard, getDashboardPathForRole, isHrRole } from './lib/roles'
+import Billing from './pages/Billing'
+import { canAccessWebDashboard, getWebStartPath, hasActiveSubscription, isHrRole } from './lib/roles'
 
 function FullPageSpinner() {
   return (
@@ -33,13 +34,13 @@ function PublicOnlyRoute({ children }) {
   }
 
   if (user && canAccessWebDashboard(user.role)) {
-    return <Navigate to={getDashboardPathForRole(user.role)} replace />
+    return <Navigate to={getWebStartPath(user)} replace />
   }
 
   return children
 }
 
-function ProtectedRoute({ children, hrOnly = false }) {
+function ProtectedRoute({ children, hrOnly = false, allowInactiveSubscription = false }) {
   const { user, loading } = useAuth()
 
   if (loading) {
@@ -52,6 +53,10 @@ function ProtectedRoute({ children, hrOnly = false }) {
 
   if (hrOnly && !isHrRole(user.role)) {
     return <Navigate to="/dashboard" replace />
+  }
+
+  if (isHrRole(user.role) && !hasActiveSubscription(user.subscription_status) && !allowInactiveSubscription) {
+    return <Navigate to="/dashboard/billing" replace />
   }
 
   return children
@@ -126,6 +131,14 @@ function App() {
             element={
               <ProtectedRoute hrOnly>
                 <Paystubs />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="billing"
+            element={
+              <ProtectedRoute hrOnly allowInactiveSubscription>
+                <Billing />
               </ProtectedRoute>
             }
           />

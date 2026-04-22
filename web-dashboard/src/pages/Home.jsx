@@ -1,6 +1,8 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import HCaptcha from '@hcaptcha/react-hcaptcha'
+import { openFastSpringCheckout } from '../lib/fastspring'
+import { useAuth } from '../contexts/AuthContext'
 import {
   Clock,
   Users,
@@ -26,6 +28,7 @@ const HCAPTCHA_SITE_KEY = '50b2fe65-b00b-4b9e-ad62-3ba471098be2'
 
 export default function Home() {
   const navigate = useNavigate()
+  const { user, isHr } = useAuth()
   const WEB3FORMS_ACCESS_KEY = '5e0edb0e-a3a0-4ff3-ba41-6bda36069668'
   const [formData, setFormData] = useState({
     businessName: '',
@@ -159,25 +162,18 @@ export default function Home() {
     }
   }
 
-  const openFastSpringCheckout = (productPath) => {
-    const fastspringBuilder = window.fastspring?.builder
-
-    if (!fastspringBuilder) {
-      alert('FastSpring checkout is still loading. Please wait a moment and try again.')
+  const handleOpenFastSpringCheckout = async (productPath) => {
+    if (!user || !isHr) {
+      navigate('/signup')
       return
     }
 
-    fastspringBuilder.push({
-      reset: true,
-      products: [
-        {
-          path: productPath,
-          quantity: 1,
-        },
-      ],
-    })
-
-    fastspringBuilder.checkout()
+    try {
+      await openFastSpringCheckout({ productPath })
+    } catch (error) {
+      console.error('FastSpring checkout failed to open:', error)
+      alert(error.message || 'FastSpring checkout is still loading. Please try again in a moment.')
+    }
   }
 
   const features = [
@@ -448,7 +444,7 @@ export default function Home() {
               Choose the Emplora plan that fits your workforce size
             </h2>
             <p className="text-lg text-gray-300 max-w-3xl mx-auto">
-              Start with the right employee range today and scale up as your company grows. All plans are billed monthly and open inside the branded Emplora checkout.
+              Create your HR account first, then choose the right employee range for your company workspace. Existing HR admins can launch checkout directly from these plan cards.
             </p>
           </div>
 
@@ -489,7 +485,7 @@ export default function Home() {
                 </div>
 
                 <button
-                  onClick={() => openFastSpringCheckout(plan.path)}
+                  onClick={() => handleOpenFastSpringCheckout(plan.path)}
                   className={`mt-10 inline-flex w-full items-center justify-center gap-2 rounded-2xl px-5 py-4 text-sm font-semibold transition-colors ${plan.buttonStyle}`}
                 >
                   Start {plan.name}

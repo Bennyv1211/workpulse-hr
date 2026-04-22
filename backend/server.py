@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, Query, Response, BackgroundTasks
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, Query, Response, BackgroundTasks, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
@@ -19,6 +19,8 @@ import io
 import csv
 import base64
 import json
+import hashlib
+import hmac
 from math import radians, cos, sin, asin, sqrt
 import asyncio
 from urllib import request as urllib_request, error as urllib_error
@@ -67,6 +69,38 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+FASTSPRING_PLAN_CATALOG = [
+    {
+        "plan_id": "starter",
+        "display_name": "Emplora Starter",
+        "product_path": "emplora-starter-monthly",
+        "price_usd": 29.0,
+        "employee_range": "1-10 employees",
+        "employee_limit": 10,
+        "description": "Employee records, attendance, leave, payroll review, and paystub delivery for small teams.",
+    },
+    {
+        "plan_id": "growth",
+        "display_name": "Emplora Growth",
+        "product_path": "emplora-growth-monthly",
+        "price_usd": 79.0,
+        "employee_range": "11-50 employees",
+        "employee_limit": 50,
+        "description": "Adds manager dashboards, bulk onboarding, exports, reports, and richer workflow oversight.",
+    },
+    {
+        "plan_id": "scale",
+        "display_name": "Emplora Scale",
+        "product_path": "emplora-scale-monthly",
+        "price_usd": 199.0,
+        "employee_range": "51-200 employees",
+        "employee_limit": 200,
+        "description": "Built for larger teams that need stronger payroll oversight and wider operational visibility.",
+    },
+]
+
+FASTSPRING_PLANS_BY_PATH = {plan["product_path"]: plan for plan in FASTSPRING_PLAN_CATALOG}
 
 
 @app.on_event("startup")
@@ -338,6 +372,296 @@ async def require_manager(current_user: dict = Depends(get_current_user)):
     return current_user
 
 
+def build_default_company_billing(now: Optional[datetime] = None) -> dict:
+    current_time = now or datetime.utcnow()
+    return {
+        "provider": "fastspring",
+        "subscription_status": "inactive",
+        "access_state": "inactive",
+        "plan_id": None,
+        "plan_name": None,
+        "product_path": None,
+        "customer_email": None,
+        "fastspring_account_id": None,
+        "fastspring_subscription_id": None,
+        "fastspring_order_id": None,
+        "invoice_url": None,
+        "management_url": None,
+        "last_event_type": None,
+        "last_event_id": None,
+        "last_event_at": None,
+        "last_charge_at": None,
+        "next_charge_at": None,
+        "trial_ends_at": None,
+        "canceled_at": None,
+        "deactivated_at": None,
+        "live_mode": False,
+        "created_at": current_time,
+        "updated_at": current_time,
+    }
+
+
+def build_company_document(company_id: str, name: str, owner_user_id: str, now: Optional[datetime] = None) -> dict:
+    current_time = now or datetime.utcnow()
+    return {
+        "id": company_id,
+        "name": name,
+        "owner_user_id": owner_user_id,
+        "billing": build_default_company_billing(current_time),
+        "created_at": current_time,
+        "updated_at": current_time,
+    }
+
+
+async def get_company_record(company_id: Optional[str]) -> Optional[dict]:
+    if not company_id:
+        return None
+
+    company = await db.companies.find_one({"id": company_id})
+    if not company:
+        return None
+
+    update_fields = {}
+    if "billing" not in company or not isinstance(company.get("billing"), dict):
+        update_fields["billing"] = build_default_company_billing()
+    else:
+        billing = company["billing"]
+        defaults = build_default_company_billing()
+        for key, value in defaults.items():
+            if key not in billing:
+                update_fields[f"billing.{key}"] = value
+
+    if update_fields:
+        update_fields["updated_at"] = datetime.utcnow()
+        await db.companies.update_one({"id": company_id}, {"$set": update_fields})
+        company = await db.companies.find_one({"id": company_id})
+
+    return company
+
+
+async def update_company_billing(company_id: str, billing_updates: Dict[str, Any]) -> Optional[dict]:
+    if not company_id:
+        return None
+
+    payload = {f"billing.{key}": value for key, value in billing_updates.items()}
+    payload["billing.updated_at"] = datetime.utcnow()
+    payload["updated_at"] = datetime.utcnow()
+    await db.companies.update_one({"id": company_id}, {"$set": payload})
+    return await get_company_record(company_id)
+
+
+def extract_fastspring_event_type(event: dict) -> str:
+    return (
+        event.get("type")
+        or event.get("event")
+        or event.get("notificationType")
+        or event.get("name")
+        or "unknown"
+    )
+
+
+def parse_fastspring_datetime(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, (int, float)):
+        if value > 9999999999:
+            return datetime.utcfromtimestamp(value / 1000)
+        return datetime.utcfromtimestamp(value)
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        try:
+            return datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+        if cleaned.isdigit():
+            return parse_fastspring_datetime(int(cleaned))
+    return None
+
+
+def resolve_plan_from_fastspring_event(event: dict) -> Optional[dict]:
+    candidate_paths: List[str] = []
+    order = event.get("order") if isinstance(event.get("order"), dict) else {}
+    subscription_object = event.get("subscription") if isinstance(event.get("subscription"), dict) else {}
+
+    for source in [event.get("items"), order.get("items"), subscription_object.get("items")]:
+        if not isinstance(source, list):
+            continue
+        for item in source:
+            if not isinstance(item, dict):
+                continue
+            product = item.get("product") if isinstance(item.get("product"), dict) else {}
+            product_path = (
+                item.get("productPath")
+                or item.get("path")
+                or product.get("path")
+                or item.get("sku")
+            )
+            if product_path:
+                candidate_paths.append(product_path)
+
+    direct_product_path = (
+        event.get("productPath")
+        or subscription_object.get("productPath")
+        or order.get("productPath")
+    )
+    if direct_product_path:
+        candidate_paths.append(direct_product_path)
+
+    for path in candidate_paths:
+        if path in FASTSPRING_PLANS_BY_PATH:
+            return FASTSPRING_PLANS_BY_PATH[path]
+
+    return None
+
+
+def get_fastspring_signature_candidates(secret: str, raw_body: bytes) -> List[str]:
+    digest = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).digest()
+    return [
+        hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest(),
+        base64.b64encode(digest).decode("utf-8"),
+    ]
+
+
+def verify_fastspring_signature(request: Request, raw_body: bytes) -> bool:
+    secret = os.environ.get("FASTSPRING_WEBHOOK_HMAC_SECRET", "").strip()
+    if not secret:
+        return True
+
+    header_candidates = [
+        request.headers.get("X-FS-Signature"),
+        request.headers.get("X-FastSpring-Signature"),
+        request.headers.get("X-FS-HMAC-SHA256"),
+        request.headers.get("X-Hmac-SHA256"),
+        request.headers.get("X-Signature"),
+    ]
+    provided_signatures = [value.strip() for value in header_candidates if value and value.strip()]
+    expected_signatures = get_fastspring_signature_candidates(secret, raw_body)
+
+    return any(
+        hmac.compare_digest(provided, expected)
+        for provided in provided_signatures
+        for expected in expected_signatures
+    )
+
+
+async def find_company_for_fastspring_event(event: dict) -> Optional[dict]:
+    order = event.get("order") if isinstance(event.get("order"), dict) else {}
+    account = event.get("account") if isinstance(event.get("account"), dict) else {}
+    if not account and isinstance(order.get("account"), dict):
+        account = order["account"]
+
+    fastspring_account_id = (
+        account.get("id")
+        or account.get("account")
+        or event.get("account")
+        or order.get("account")
+    )
+    if fastspring_account_id:
+        company = await db.companies.find_one({"billing.fastspring_account_id": fastspring_account_id})
+        if company:
+            return await get_company_record(company["id"])
+
+    contact = account.get("contact") if isinstance(account.get("contact"), dict) else {}
+    email = (contact.get("email") or event.get("email") or "").strip().lower()
+    if not email:
+        return None
+
+    user = await db.users.find_one({"email": email})
+    if user and user.get("company_id"):
+        return await get_company_record(user["company_id"])
+
+    company = await db.companies.find_one({"billing.customer_email": email})
+    if company:
+        return await get_company_record(company["id"])
+
+    return None
+
+
+async def apply_fastspring_event_to_company(event: dict) -> Optional[dict]:
+    company = await find_company_for_fastspring_event(event)
+    if not company:
+        logger.warning("FastSpring event could not be matched to a company workspace")
+        return None
+
+    plan = resolve_plan_from_fastspring_event(event)
+    event_type = extract_fastspring_event_type(event)
+    order = event.get("order") if isinstance(event.get("order"), dict) else {}
+    account = event.get("account") if isinstance(event.get("account"), dict) else {}
+    if not account and isinstance(order.get("account"), dict):
+        account = order["account"]
+    contact = account.get("contact") if isinstance(account.get("contact"), dict) else {}
+    subscription = event.get("subscription") if isinstance(event.get("subscription"), dict) else {}
+
+    subscription_id = (
+        subscription.get("id")
+        or subscription.get("subscription")
+        or event.get("subscription")
+        or event.get("id")
+    )
+    state = subscription.get("state") or event.get("state")
+    if not state:
+        if event_type in {"order.completed", "subscription.activated", "subscription.charge.completed"}:
+            state = "active"
+        elif event_type == "subscription.charge.failed":
+            state = "past_due"
+        elif event_type == "subscription.canceled":
+            state = "canceled"
+        elif event_type == "subscription.deactivated":
+            state = "deactivated"
+        else:
+            state = "inactive"
+
+    access_state = "inactive"
+    if state in {"active", "trial"}:
+        access_state = "active"
+    elif state in {"canceled"}:
+        access_state = "grace"
+    elif state in {"past_due", "deactivated"}:
+        access_state = "suspended"
+
+    timestamp = parse_fastspring_datetime(
+        event.get("changed")
+        or subscription.get("changed")
+        or order.get("changed")
+        or datetime.utcnow()
+    )
+
+    billing_updates = {
+        "subscription_status": state,
+        "access_state": access_state,
+        "customer_email": (contact.get("email") or company.get("billing", {}).get("customer_email") or "").strip().lower() or None,
+        "fastspring_account_id": account.get("id") or account.get("account") or company.get("billing", {}).get("fastspring_account_id"),
+        "fastspring_subscription_id": subscription_id,
+        "fastspring_order_id": order.get("id") or order.get("order") or company.get("billing", {}).get("fastspring_order_id"),
+        "invoice_url": order.get("invoiceUrl") or company.get("billing", {}).get("invoice_url"),
+        "management_url": account.get("url") or account.get("accountUrl") or company.get("billing", {}).get("management_url"),
+        "last_event_type": event_type,
+        "last_event_id": event.get("id") or subscription_id or order.get("id"),
+        "last_event_at": timestamp,
+        "live_mode": bool(order.get("live") if isinstance(order, dict) else event.get("live")),
+    }
+
+    if plan:
+        billing_updates["plan_id"] = plan["plan_id"]
+        billing_updates["plan_name"] = plan["display_name"]
+        billing_updates["product_path"] = plan["product_path"]
+
+    if event_type in {"order.completed", "subscription.activated"} and timestamp:
+        billing_updates["last_charge_at"] = timestamp
+    if event_type == "subscription.charge.completed" and timestamp:
+        billing_updates["last_charge_at"] = timestamp
+    if event_type == "subscription.canceled" and timestamp:
+        billing_updates["canceled_at"] = timestamp
+    if event_type == "subscription.deactivated" and timestamp:
+        billing_updates["deactivated_at"] = timestamp
+
+    return await update_company_billing(company["id"], billing_updates)
+
+
 async def ensure_company_for_user(user: dict) -> Optional[str]:
     if user.get("company_id"):
         return user.get("company_id")
@@ -355,15 +679,7 @@ async def ensure_company_for_user(user: dict) -> Optional[str]:
         company_id = str(uuid.uuid4())
         company_name = f"{user.get('first_name', 'HR')}'s Workspace"
         now = datetime.utcnow()
-        await db.companies.insert_one(
-            {
-                "id": company_id,
-                "name": company_name,
-                "owner_user_id": user["id"],
-                "created_at": now,
-                "updated_at": now,
-            }
-        )
+        await db.companies.insert_one(build_company_document(company_id, company_name, user["id"], now))
         await db.users.update_one(
             {"id": user["id"]},
             {"$set": {"company_id": company_id, "updated_at": now}},
@@ -1404,6 +1720,9 @@ class UserResponse(BaseModel):
     role: str
     employee_id: Optional[str] = None
     company_id: Optional[str] = None
+    company_name: Optional[str] = None
+    subscription_status: Optional[str] = None
+    subscription_plan: Optional[str] = None
     security_question: Optional[str] = None
     onboarding_completed: bool = False
     created_at: datetime
@@ -1416,6 +1735,43 @@ class TokenResponse(BaseModel):
 class PushTokenRegister(BaseModel):
     push_token: str
     platform: Optional[str] = None
+
+
+class BillingPlanResponse(BaseModel):
+    plan_id: str
+    display_name: str
+    product_path: str
+    price_usd: float
+    employee_range: str
+    employee_limit: int
+    description: str
+
+
+class CompanyBillingResponse(BaseModel):
+    company_id: str
+    company_name: str
+    billing_provider: str
+    subscription_status: str
+    access_state: str
+    plan_id: Optional[str] = None
+    plan_name: Optional[str] = None
+    product_path: Optional[str] = None
+    customer_email: Optional[str] = None
+    fastspring_account_id: Optional[str] = None
+    fastspring_subscription_id: Optional[str] = None
+    fastspring_order_id: Optional[str] = None
+    invoice_url: Optional[str] = None
+    management_url: Optional[str] = None
+    last_event_type: Optional[str] = None
+    last_event_at: Optional[datetime] = None
+    last_charge_at: Optional[datetime] = None
+    canceled_at: Optional[datetime] = None
+    deactivated_at: Optional[datetime] = None
+    live_mode: bool = False
+    storefront_environment: str
+    storefront_script_url: str
+    storefront_value: str
+    plans: List[BillingPlanResponse]
 
 # Department Models
 class DepartmentCreate(BaseModel):
@@ -2506,13 +2862,7 @@ async def register(user_data: UserCreate, background_tasks: BackgroundTasks):
             raise HTTPException(status_code=400, detail="Company name is required for HR registration")
         company_id = str(uuid.uuid4())
         now = datetime.utcnow()
-        await db.companies.insert_one({
-            "id": company_id,
-            "name": company_name,
-            "owner_user_id": user_id,
-            "created_at": now,
-            "updated_at": now,
-        })
+        await db.companies.insert_one(build_company_document(company_id, company_name, user_id, now))
     user = {
         "id": user_id,
         "email": user_data.email.lower(),
@@ -2558,6 +2908,9 @@ async def register(user_data: UserCreate, background_tasks: BackgroundTasks):
             role=user["role"],
             employee_id=user["employee_id"],
             company_id=user.get("company_id"),
+            company_name=company_name,
+            subscription_status="inactive" if company_id else None,
+            subscription_plan=None,
             security_question=user.get("security_question"),
             onboarding_completed=user["onboarding_completed"],
             created_at=user["created_at"]
@@ -2595,6 +2948,7 @@ async def login(credentials: UserLogin):
     
     access_token = create_access_token(data={"sub": user["id"], "role": user["role"]}, expires_delta=expires_delta)
     await log_activity(user["id"], "user_login", f"User logged in: {user['email']}")
+    company = await get_company_record(user.get("company_id"))
     
     return TokenResponse(
         access_token=access_token,
@@ -2606,6 +2960,9 @@ async def login(credentials: UserLogin):
             role=user["role"],
             employee_id=user.get("employee_id"),
             company_id=user.get("company_id"),
+            company_name=company.get("name") if company else None,
+            subscription_status=(company or {}).get("billing", {}).get("subscription_status"),
+            subscription_plan=(company or {}).get("billing", {}).get("plan_name"),
             security_question=user.get("security_question"),
             onboarding_completed=user.get("onboarding_completed", False),
             created_at=user["created_at"]
@@ -2614,6 +2971,7 @@ async def login(credentials: UserLogin):
 
 @api_router.get("/auth/me", response_model=UserResponse)
 async def get_me(current_user: dict = Depends(get_current_user)):
+    company = await get_company_record(await get_current_company_id(current_user))
     return UserResponse(
         id=current_user["id"],
         email=current_user["email"],
@@ -2622,10 +2980,107 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         role=current_user["role"],
         employee_id=current_user.get("employee_id"),
         company_id=current_user.get("company_id"),
+        company_name=company.get("name") if company else None,
+        subscription_status=(company or {}).get("billing", {}).get("subscription_status"),
+        subscription_plan=(company or {}).get("billing", {}).get("plan_name"),
         security_question=current_user.get("security_question"),
         onboarding_completed=current_user.get("onboarding_completed", False),
         created_at=current_user["created_at"]
     )
+
+
+@api_router.get("/billing/subscription", response_model=CompanyBillingResponse)
+async def get_company_billing(current_user: dict = Depends(require_admin)):
+    company_id = await get_current_company_id(current_user)
+    company = await get_company_record(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company workspace not found")
+
+    billing = company.get("billing") or build_default_company_billing()
+    storefront_environment = os.environ.get("FASTSPRING_STOREFRONT_ENV", "test").strip() or "test"
+    storefront_script_url = os.environ.get(
+        "FASTSPRING_SCRIPT_URL",
+        "https://sbl.onfastspring.com/sbl/1.0.7/fastspring-builder.min.js",
+    ).strip() or "https://sbl.onfastspring.com/sbl/1.0.7/fastspring-builder.min.js"
+    storefront_value = os.environ.get(
+        "FASTSPRING_STOREFRONT",
+        "emplora.test.onfastspring.com/popup-emplora",
+    ).strip() or "emplora.test.onfastspring.com/popup-emplora"
+
+    return CompanyBillingResponse(
+        company_id=company["id"],
+        company_name=company["name"],
+        billing_provider=billing.get("provider", "fastspring"),
+        subscription_status=billing.get("subscription_status", "inactive"),
+        access_state=billing.get("access_state", "inactive"),
+        plan_id=billing.get("plan_id"),
+        plan_name=billing.get("plan_name"),
+        product_path=billing.get("product_path"),
+        customer_email=billing.get("customer_email"),
+        fastspring_account_id=billing.get("fastspring_account_id"),
+        fastspring_subscription_id=billing.get("fastspring_subscription_id"),
+        fastspring_order_id=billing.get("fastspring_order_id"),
+        invoice_url=billing.get("invoice_url"),
+        management_url=billing.get("management_url"),
+        last_event_type=billing.get("last_event_type"),
+        last_event_at=billing.get("last_event_at"),
+        last_charge_at=billing.get("last_charge_at"),
+        canceled_at=billing.get("canceled_at"),
+        deactivated_at=billing.get("deactivated_at"),
+        live_mode=bool(billing.get("live_mode")),
+        storefront_environment=storefront_environment,
+        storefront_script_url=storefront_script_url,
+        storefront_value=storefront_value,
+        plans=[BillingPlanResponse(**plan) for plan in FASTSPRING_PLAN_CATALOG],
+    )
+
+
+@api_router.post("/billing/fastspring/webhook")
+async def fastspring_webhook(request: Request):
+    raw_body = await request.body()
+    if not verify_fastspring_signature(request, raw_body):
+        raise HTTPException(status_code=401, detail="Invalid FastSpring webhook signature")
+
+    try:
+        payload = json.loads(raw_body.decode("utf-8") or "{}")
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
+
+    if isinstance(payload, dict) and isinstance(payload.get("events"), list):
+        events = payload["events"]
+    elif isinstance(payload, list):
+        events = payload
+    else:
+        events = [payload]
+
+    processed = 0
+    applied = 0
+
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+
+        processed += 1
+        event_id = event.get("id") or event.get("subscription") or extract_fastspring_event_type(event)
+        duplicate = await db.fastspring_webhook_events.find_one({"event_id": event_id})
+        if duplicate:
+            continue
+
+        await db.fastspring_webhook_events.insert_one(
+            {
+                "id": str(uuid.uuid4()),
+                "event_id": event_id,
+                "event_type": extract_fastspring_event_type(event),
+                "payload": event,
+                "received_at": datetime.utcnow(),
+            }
+        )
+
+        company = await apply_fastspring_event_to_company(event)
+        if company:
+            applied += 1
+
+    return {"processed": processed, "applied": applied}
 
 
 @api_router.post("/notifications/push-token")

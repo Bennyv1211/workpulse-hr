@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import api from '../lib/api'
-import { canAccessWebDashboard, isHrRole } from '../lib/roles'
+import { canAccessWebDashboard, getWebStartPath, hasActiveSubscription, isHrRole } from '../lib/roles'
 
 const AuthContext = createContext(null)
 
@@ -96,6 +96,8 @@ export function AuthProvider({ children }) {
       logout,
       registerHr,
       isHr: isHrRole(user?.role),
+      subscriptionActive: hasActiveSubscription(user?.subscription_status),
+      startPath: getWebStartPath(user),
     }),
     [loading, token, user]
   )
