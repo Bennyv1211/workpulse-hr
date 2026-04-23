@@ -27,6 +27,8 @@ from urllib import request as urllib_request, error as urllib_error
 from zoneinfo import ZoneInfo
 import smtplib
 import ssl
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from reportlab.lib.pagesizes import letter
@@ -69,6 +71,105 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+_r2_client = None
+
+
+def get_r2_config() -> Optional[Dict[str, str]]:
+    bucket = os.environ.get("R2_BUCKET", "").strip()
+    access_key = os.environ.get("R2_ACCESS_KEY_ID", "").strip()
+    secret_key = os.environ.get("R2_SECRET_ACCESS_KEY", "").strip()
+    endpoint = os.environ.get("R2_ENDPOINT", "").strip()
+    account_id = os.environ.get("R2_ACCOUNT_ID", "").strip()
+
+    if not endpoint and account_id:
+        endpoint = f"https://{account_id}.r2.cloudflarestorage.com"
+
+    if not all([bucket, access_key, secret_key, endpoint]):
+        return None
+
+    return {
+        "bucket": bucket,
+        "access_key": access_key,
+        "secret_key": secret_key,
+        "endpoint": endpoint,
+        "public_base_url": os.environ.get("R2_PUBLIC_BASE_URL", "").strip(),
+    }
+
+
+def get_r2_client():
+    global _r2_client
+    config = get_r2_config()
+    if not config:
+        return None
+
+    if _r2_client is None:
+        _r2_client = boto3.client(
+            "s3",
+            endpoint_url=config["endpoint"],
+            aws_access_key_id=config["access_key"],
+            aws_secret_access_key=config["secret_key"],
+            region_name="auto",
+        )
+
+    return _r2_client
+
+
+def r2_storage_enabled() -> bool:
+    return get_r2_client() is not None
+
+
+def build_paystub_storage_key(paystub: dict) -> str:
+    company_id = paystub.get("company_id") or "legacy"
+    employee_id = paystub.get("employee_id") or "employee"
+    pay_period_end = paystub.get("pay_period_end") or paystub.get("pay_date") or datetime.utcnow().strftime("%Y-%m-%d")
+    paystub_id = paystub.get("id") or str(uuid.uuid4())
+    return f"paystubs/{company_id}/{employee_id}/{pay_period_end}/{paystub_id}.pdf"
+
+
+async def upload_pdf_to_r2(storage_key: str, pdf_bytes: bytes) -> Optional[str]:
+    config = get_r2_config()
+    client = get_r2_client()
+    if not config or not client:
+        return None
+
+    try:
+        await asyncio.to_thread(
+            client.put_object,
+            Bucket=config["bucket"],
+            Key=storage_key,
+            Body=pdf_bytes,
+            ContentType="application/pdf",
+        )
+    except (BotoCoreError, ClientError) as exc:
+        logger.warning("R2 paystub upload failed for %s: %s", storage_key, exc)
+        raise HTTPException(status_code=503, detail="Paystub storage upload failed") from exc
+
+    if config["public_base_url"]:
+        return f"{config['public_base_url'].rstrip('/')}/{storage_key}"
+    return None
+
+
+async def download_pdf_from_r2(storage_key: str) -> bytes:
+    config = get_r2_config()
+    client = get_r2_client()
+    if not config or not client:
+        raise HTTPException(status_code=503, detail="Paystub storage is not configured")
+
+    try:
+        response = await asyncio.to_thread(
+            client.get_object,
+            Bucket=config["bucket"],
+            Key=storage_key,
+        )
+        return await asyncio.to_thread(response["Body"].read)
+    except ClientError as exc:
+        logger.warning("R2 paystub download failed for %s: %s", storage_key, exc)
+        raise HTTPException(status_code=404, detail="Stored paystub PDF not found") from exc
+    except BotoCoreError as exc:
+        logger.warning("R2 paystub download failed for %s: %s", storage_key, exc)
+        raise HTTPException(status_code=503, detail="Paystub storage download failed") from exc
+
 
 FASTSPRING_PLAN_CATALOG = [
     {
@@ -3823,6 +3924,7 @@ async def upsert_paystub(payload: PaystubCreate, current_user: dict) -> dict:
 
     update_doc = {
         "employee_id": payload.employee_id,
+        "company_id": employee.get("company_id"),
         "payroll_id": payload.payroll_id,
         "pay_period_start": payload.pay_period_start,
         "pay_period_end": payload.pay_period_end,
@@ -3837,6 +3939,9 @@ async def upsert_paystub(payload: PaystubCreate, current_user: dict) -> dict:
         "net_pay": payload.net_pay,
         "pdf_filename": payload.file_name or f"{employee_code}_{pay_date}.pdf",
         "pdf_content": pdf_bytes,
+        "pdf_storage_key": (existing_paystub or {}).get("pdf_storage_key"),
+        "pdf_url": (existing_paystub or {}).get("pdf_url"),
+        "archived_at": (existing_paystub or {}).get("archived_at"),
         "published": payload.published,
         "updated_at": datetime.utcnow(),
     }
@@ -4008,6 +4113,15 @@ async def download_paystub(paystub_id: str, token: Optional[str] = None, current
     if pdf_content:
         return Response(
             content=pdf_content,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={paystub.get('pdf_filename', 'paystub.pdf')}"}
+        )
+
+    storage_key = paystub.get("pdf_storage_key")
+    if storage_key:
+        pdf_bytes = await download_pdf_from_r2(storage_key)
+        return Response(
+            content=pdf_bytes,
             media_type="application/pdf",
             headers={"Content-Disposition": f"attachment; filename={paystub.get('pdf_filename', 'paystub.pdf')}"}
         )
@@ -6175,6 +6289,110 @@ async def export_admin_backup(current_user: dict = Depends(require_admin)):
 
     await log_activity(current_user["id"], "admin_backup_export", "Exported full app backup data")
     return backup_data
+
+
+@api_router.post("/admin/archive/paystubs")
+async def archive_old_paystub_pdfs(
+    older_than_days: int = Query(default=90, ge=1, le=3650),
+    limit: int = Query(default=100, ge=1, le=1000),
+    current_user: dict = Depends(require_admin),
+):
+    if not r2_storage_enabled():
+        raise HTTPException(status_code=503, detail="R2 storage is not configured")
+
+    company_id = await get_current_company_id(current_user)
+    if not company_id:
+        raise HTTPException(status_code=400, detail="Company workspace not found")
+
+    cutoff = datetime.utcnow() - timedelta(days=older_than_days)
+    employees = await db.employees.find({"company_id": company_id}).to_list(10000)
+    employee_ids = [employee["id"] for employee in employees]
+    query = {
+        "employee_id": {"$in": employee_ids},
+        "pdf_content": {"$exists": True, "$ne": None},
+        "$or": [
+            {"created_at": {"$lte": cutoff}},
+            {"pay_date": {"$lte": cutoff.strftime("%Y-%m-%d")}},
+        ],
+    }
+
+    paystubs = await db.paystubs.find(query).sort("created_at", 1).limit(limit).to_list(limit)
+    archived = 0
+    skipped = 0
+    failed: List[Dict[str, str]] = []
+
+    for paystub in paystubs:
+        pdf_content = paystub.get("pdf_content")
+        if not pdf_content:
+            skipped += 1
+            continue
+
+        storage_key = paystub.get("pdf_storage_key") or build_paystub_storage_key({**paystub, "company_id": company_id})
+        try:
+            pdf_url = await upload_pdf_to_r2(storage_key, pdf_content)
+            await db.paystubs.update_one(
+                {"id": paystub["id"]},
+                {
+                    "$set": {
+                        "company_id": paystub.get("company_id") or company_id,
+                        "pdf_storage_key": storage_key,
+                        "pdf_url": pdf_url,
+                        "archived_at": datetime.utcnow(),
+                        "updated_at": datetime.utcnow(),
+                    },
+                    "$unset": {"pdf_content": ""},
+                },
+            )
+            archived += 1
+        except HTTPException as exc:
+            failed.append({"paystub_id": paystub.get("id", "unknown"), "reason": exc.detail})
+
+    await log_activity(
+        current_user["id"],
+        "paystub_archive_completed",
+        f"Archived {archived} old paystub PDF(s) to R2",
+        metadata={
+            "older_than_days": older_than_days,
+            "archived": archived,
+            "skipped": skipped,
+            "failed_count": len(failed),
+        },
+    )
+
+    return {
+        "message": f"Archived {archived} paystub PDF(s)",
+        "archived": archived,
+        "skipped": skipped,
+        "failed": failed,
+        "older_than_days": older_than_days,
+        "storage": "cloudflare_r2",
+    }
+
+
+@api_router.post("/admin/cleanup/temporary-data")
+async def cleanup_temporary_data(
+    notification_days: int = Query(default=90, ge=7, le=3650),
+    current_user: dict = Depends(require_admin),
+):
+    company_id = await get_current_company_id(current_user)
+    cutoff = datetime.utcnow() - timedelta(days=notification_days)
+    notification_query: Dict[str, Any] = {"created_at": {"$lte": cutoff}}
+    if company_id:
+        notification_query["company_id"] = company_id
+
+    notifications_result = await db.notifications.delete_many(notification_query)
+    await log_activity(
+        current_user["id"],
+        "temporary_data_cleanup",
+        f"Deleted {notifications_result.deleted_count} old notification(s)",
+        metadata={"notification_days": notification_days},
+    )
+
+    return {
+        "message": "Temporary cleanup complete",
+        "deleted_notifications": notifications_result.deleted_count,
+        "notification_days": notification_days,
+    }
 
 # ===== Dashboard Routes =====
 @api_router.get("/dashboard/stats", response_model=DashboardStats)
