@@ -51,6 +51,12 @@ export async function openFastSpringCheckout({
   productPath,
   scriptUrl = DEFAULT_FASTSPRING_SCRIPT_URL,
   storefront = DEFAULT_FASTSPRING_STOREFRONT,
+  customerEmail,
+  firstName,
+  lastName,
+  companyId,
+  companyName,
+  planId,
 } = {}) {
   if (!productPath) {
     throw new Error('A FastSpring product path is required.')
@@ -59,6 +65,22 @@ export async function openFastSpringCheckout({
   const builder = await loadFastSpringBuilder({ scriptUrl, storefront })
   builder.push({
     reset: true,
+    paymentContact: customerEmail
+      ? {
+          email: customerEmail,
+          firstName: firstName || '',
+          lastName: lastName || '',
+          company: companyName || '',
+        }
+      : undefined,
+    tags: {
+      source: 'emplora_web_dashboard',
+      company_id: companyId || '',
+      company_name: companyName || '',
+      plan_id: planId || '',
+      product_path: productPath,
+      customer_email: customerEmail || '',
+    },
     products: [{ path: productPath, quantity: 1 }],
   })
   builder.checkout()

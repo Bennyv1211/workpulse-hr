@@ -60,6 +60,12 @@ export default function Billing() {
         productPath: plan.product_path,
         scriptUrl: data?.storefront_script_url,
         storefront: data?.storefront_value,
+        customerEmail: data?.checkout_email || data?.customer_email,
+        firstName: data?.checkout_first_name,
+        lastName: data?.checkout_last_name,
+        companyId: data?.company_id,
+        companyName: data?.company_name,
+        planId: plan.plan_id,
       })
     } catch (error) {
       console.error('Failed to open FastSpring checkout:', error)

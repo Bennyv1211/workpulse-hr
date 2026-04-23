@@ -460,6 +460,83 @@ def extract_fastspring_event_type(event: dict) -> str:
     )
 
 
+def get_fastspring_event_body(event: dict) -> dict:
+    for key in ["data", "payload", "body"]:
+        value = event.get(key)
+        if isinstance(value, dict):
+            return value
+    return event
+
+
+def collect_fastspring_sources(event: dict) -> List[dict]:
+    body = get_fastspring_event_body(event)
+    sources = [event]
+    if body is not event:
+        sources.append(body)
+
+    for source in list(sources):
+        for key in ["order", "subscription", "account", "contact", "customer", "paymentContact"]:
+            value = source.get(key)
+            if isinstance(value, dict):
+                sources.append(value)
+
+    return sources
+
+
+def normalize_fastspring_tags(value: Any) -> Dict[str, str]:
+    tags: Dict[str, str] = {}
+    if isinstance(value, dict):
+        for key, tag_value in value.items():
+            if tag_value is not None:
+                tags[str(key).strip().lower()] = str(tag_value).strip()
+    elif isinstance(value, list):
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            key = item.get("key") or item.get("name")
+            tag_value = item.get("value")
+            if key and tag_value is not None:
+                tags[str(key).strip().lower()] = str(tag_value).strip()
+    return tags
+
+
+def extract_fastspring_tags(event: dict) -> Dict[str, str]:
+    tags: Dict[str, str] = {}
+    for source in collect_fastspring_sources(event):
+        for key in ["tags", "tag", "custom", "metadata"]:
+            tags.update(normalize_fastspring_tags(source.get(key)))
+    return tags
+
+
+def extract_fastspring_email_candidates(event: dict) -> List[str]:
+    candidates: List[str] = []
+    for source in collect_fastspring_sources(event):
+        contact = source.get("contact") if isinstance(source.get("contact"), dict) else {}
+        payment_contact = source.get("paymentContact") if isinstance(source.get("paymentContact"), dict) else {}
+        customer = source.get("customer") if isinstance(source.get("customer"), dict) else {}
+        for value in [
+            source.get("email"),
+            source.get("customerEmail"),
+            source.get("customer_email"),
+            contact.get("email"),
+            payment_contact.get("email"),
+            customer.get("email"),
+        ]:
+            if value:
+                cleaned = str(value).strip().lower()
+                if cleaned and cleaned not in candidates:
+                    candidates.append(cleaned)
+
+    tags = extract_fastspring_tags(event)
+    tagged_email = tags.get("customer_email") or tags.get("email")
+    if tagged_email:
+        cleaned = tagged_email.strip().lower()
+        if cleaned and cleaned not in candidates:
+            candidates.append(cleaned)
+
+    return candidates
+
+
 def parse_fastspring_datetime(value: Any) -> Optional[datetime]:
     if value is None:
         return None
@@ -484,10 +561,16 @@ def parse_fastspring_datetime(value: Any) -> Optional[datetime]:
 
 def resolve_plan_from_fastspring_event(event: dict) -> Optional[dict]:
     candidate_paths: List[str] = []
-    order = event.get("order") if isinstance(event.get("order"), dict) else {}
-    subscription_object = event.get("subscription") if isinstance(event.get("subscription"), dict) else {}
+    body = get_fastspring_event_body(event)
+    order = body.get("order") if isinstance(body.get("order"), dict) else {}
+    subscription_object = body.get("subscription") if isinstance(body.get("subscription"), dict) else {}
 
-    for source in [event.get("items"), order.get("items"), subscription_object.get("items")]:
+    tags = extract_fastspring_tags(event)
+    tagged_product_path = tags.get("product_path")
+    if tagged_product_path:
+        candidate_paths.append(tagged_product_path)
+
+    for source in [body.get("items"), event.get("items"), order.get("items"), subscription_object.get("items")]:
         if not isinstance(source, list):
             continue
         for item in source:
@@ -504,7 +587,8 @@ def resolve_plan_from_fastspring_event(event: dict) -> Optional[dict]:
                 candidate_paths.append(product_path)
 
     direct_product_path = (
-        event.get("productPath")
+        body.get("productPath")
+        or event.get("productPath")
         or subscription_object.get("productPath")
         or order.get("productPath")
     )
@@ -549,14 +633,23 @@ def verify_fastspring_signature(request: Request, raw_body: bytes) -> bool:
 
 
 async def find_company_for_fastspring_event(event: dict) -> Optional[dict]:
-    order = event.get("order") if isinstance(event.get("order"), dict) else {}
-    account = event.get("account") if isinstance(event.get("account"), dict) else {}
+    body = get_fastspring_event_body(event)
+    tags = extract_fastspring_tags(event)
+    company_id = tags.get("company_id") or tags.get("companyid") or tags.get("emplora_company_id")
+    if company_id:
+        company = await get_company_record(company_id)
+        if company:
+            return company
+
+    order = body.get("order") if isinstance(body.get("order"), dict) else {}
+    account = body.get("account") if isinstance(body.get("account"), dict) else {}
     if not account and isinstance(order.get("account"), dict):
         account = order["account"]
 
     fastspring_account_id = (
         account.get("id")
         or account.get("account")
+        or body.get("account")
         or event.get("account")
         or order.get("account")
     )
@@ -565,18 +658,15 @@ async def find_company_for_fastspring_event(event: dict) -> Optional[dict]:
         if company:
             return await get_company_record(company["id"])
 
-    contact = account.get("contact") if isinstance(account.get("contact"), dict) else {}
-    email = (contact.get("email") or event.get("email") or "").strip().lower()
-    if not email:
-        return None
+    emails = extract_fastspring_email_candidates(event)
+    for email in emails:
+        user = await db.users.find_one({"email": email})
+        if user and user.get("company_id"):
+            return await get_company_record(user["company_id"])
 
-    user = await db.users.find_one({"email": email})
-    if user and user.get("company_id"):
-        return await get_company_record(user["company_id"])
-
-    company = await db.companies.find_one({"billing.customer_email": email})
-    if company:
-        return await get_company_record(company["id"])
+        company = await db.companies.find_one({"billing.customer_email": email})
+        if company:
+            return await get_company_record(company["id"])
 
     return None
 
@@ -589,20 +679,23 @@ async def apply_fastspring_event_to_company(event: dict) -> Optional[dict]:
 
     plan = resolve_plan_from_fastspring_event(event)
     event_type = extract_fastspring_event_type(event)
-    order = event.get("order") if isinstance(event.get("order"), dict) else {}
-    account = event.get("account") if isinstance(event.get("account"), dict) else {}
+    body = get_fastspring_event_body(event)
+    order = body.get("order") if isinstance(body.get("order"), dict) else {}
+    account = body.get("account") if isinstance(body.get("account"), dict) else {}
     if not account and isinstance(order.get("account"), dict):
         account = order["account"]
     contact = account.get("contact") if isinstance(account.get("contact"), dict) else {}
-    subscription = event.get("subscription") if isinstance(event.get("subscription"), dict) else {}
+    subscription = body.get("subscription") if isinstance(body.get("subscription"), dict) else {}
+    email_candidates = extract_fastspring_email_candidates(event)
 
     subscription_id = (
         subscription.get("id")
         or subscription.get("subscription")
+        or body.get("subscription")
+        or body.get("id")
         or event.get("subscription")
-        or event.get("id")
     )
-    state = subscription.get("state") or event.get("state")
+    state = subscription.get("state") or body.get("state") or event.get("state")
     if not state:
         if event_type in {"order.completed", "subscription.activated", "subscription.charge.completed"}:
             state = "active"
@@ -624,7 +717,8 @@ async def apply_fastspring_event_to_company(event: dict) -> Optional[dict]:
         access_state = "suspended"
 
     timestamp = parse_fastspring_datetime(
-        event.get("changed")
+        body.get("changed")
+        or event.get("changed")
         or subscription.get("changed")
         or order.get("changed")
         or datetime.utcnow()
@@ -633,16 +727,16 @@ async def apply_fastspring_event_to_company(event: dict) -> Optional[dict]:
     billing_updates = {
         "subscription_status": state,
         "access_state": access_state,
-        "customer_email": (contact.get("email") or company.get("billing", {}).get("customer_email") or "").strip().lower() or None,
+        "customer_email": (contact.get("email") or (email_candidates[0] if email_candidates else None) or company.get("billing", {}).get("customer_email") or "").strip().lower() or None,
         "fastspring_account_id": account.get("id") or account.get("account") or company.get("billing", {}).get("fastspring_account_id"),
         "fastspring_subscription_id": subscription_id,
         "fastspring_order_id": order.get("id") or order.get("order") or company.get("billing", {}).get("fastspring_order_id"),
         "invoice_url": order.get("invoiceUrl") or company.get("billing", {}).get("invoice_url"),
         "management_url": account.get("url") or account.get("accountUrl") or company.get("billing", {}).get("management_url"),
         "last_event_type": event_type,
-        "last_event_id": event.get("id") or subscription_id or order.get("id"),
+        "last_event_id": event.get("id") or body.get("id") or subscription_id or order.get("id"),
         "last_event_at": timestamp,
-        "live_mode": bool(order.get("live") if isinstance(order, dict) else event.get("live")),
+        "live_mode": bool(order.get("live") if isinstance(order, dict) else body.get("live") or event.get("live")),
     }
 
     if plan:
@@ -1771,6 +1865,9 @@ class CompanyBillingResponse(BaseModel):
     storefront_environment: str
     storefront_script_url: str
     storefront_value: str
+    checkout_email: Optional[str] = None
+    checkout_first_name: Optional[str] = None
+    checkout_last_name: Optional[str] = None
     plans: List[BillingPlanResponse]
 
 # Department Models
@@ -3031,6 +3128,9 @@ async def get_company_billing(current_user: dict = Depends(require_admin)):
         storefront_environment=storefront_environment,
         storefront_script_url=storefront_script_url,
         storefront_value=storefront_value,
+        checkout_email=current_user.get("email"),
+        checkout_first_name=current_user.get("first_name"),
+        checkout_last_name=current_user.get("last_name"),
         plans=[BillingPlanResponse(**plan) for plan in FASTSPRING_PLAN_CATALOG],
     )
 
