@@ -203,6 +203,52 @@ FASTSPRING_PLAN_CATALOG = [
 
 FASTSPRING_PLANS_BY_PATH = {plan["product_path"]: plan for plan in FASTSPRING_PLAN_CATALOG}
 
+PAYPAL_API_BASE_URLS = {
+    "sandbox": "https://api-m.sandbox.paypal.com",
+    "live": "https://api-m.paypal.com",
+}
+
+
+def get_paypal_environment() -> str:
+    configured = os.environ.get("PAYPAL_ENV", "live").strip().lower()
+    return "sandbox" if configured == "sandbox" else "live"
+
+
+def get_paypal_api_base_url() -> str:
+    return PAYPAL_API_BASE_URLS[get_paypal_environment()]
+
+
+def get_paypal_plan_id(plan_id: str) -> Optional[str]:
+    env_key = f"PAYPAL_PLAN_ID_{plan_id.upper()}"
+    value = os.environ.get(env_key, "").strip()
+    return value or None
+
+
+def get_paypal_plan_catalog() -> List[dict]:
+    plans = []
+    for plan in FASTSPRING_PLAN_CATALOG:
+        plans.append({
+            **plan,
+            "paypal_plan_id": get_paypal_plan_id(plan["plan_id"]),
+        })
+    return plans
+
+
+PAYPAL_PLAN_KEYS = {
+    "starter": "starter",
+    "growth": "growth",
+    "scale": "scale",
+}
+
+
+def resolve_plan_from_paypal_plan_id(paypal_plan_id: Optional[str]) -> Optional[dict]:
+    if not paypal_plan_id:
+        return None
+    for plan in get_paypal_plan_catalog():
+        if plan.get("paypal_plan_id") == paypal_plan_id:
+            return plan
+    return None
+
 
 @app.on_event("startup")
 async def start_background_notification_worker():
@@ -476,13 +522,16 @@ async def require_manager(current_user: dict = Depends(get_current_user)):
 def build_default_company_billing(now: Optional[datetime] = None) -> dict:
     current_time = now or datetime.utcnow()
     return {
-        "provider": "fastspring",
+        "provider": "paypal",
         "subscription_status": "inactive",
         "access_state": "inactive",
         "plan_id": None,
         "plan_name": None,
         "product_path": None,
         "customer_email": None,
+        "paypal_subscription_id": None,
+        "paypal_plan_id": None,
+        "paypal_order_id": None,
         "fastspring_account_id": None,
         "fastspring_subscription_id": None,
         "fastspring_order_id": None,
@@ -855,6 +904,214 @@ async def apply_fastspring_event_to_company(event: dict) -> Optional[dict]:
         billing_updates["deactivated_at"] = timestamp
 
     return await update_company_billing(company["id"], billing_updates)
+
+
+def get_paypal_credentials() -> Dict[str, str]:
+    return {
+        "client_id": os.environ.get("PAYPAL_CLIENT_ID", "").strip(),
+        "client_secret": os.environ.get("PAYPAL_CLIENT_SECRET", "").strip(),
+        "webhook_id": os.environ.get("PAYPAL_WEBHOOK_ID", "").strip(),
+    }
+
+
+async def get_paypal_access_token() -> str:
+    credentials = get_paypal_credentials()
+    if not credentials["client_id"] or not credentials["client_secret"]:
+        raise HTTPException(status_code=503, detail="PayPal credentials are not configured")
+
+    auth_value = base64.b64encode(
+        f"{credentials['client_id']}:{credentials['client_secret']}".encode("ascii")
+    ).decode("ascii")
+    request = urllib_request.Request(
+        f"{get_paypal_api_base_url()}/v1/oauth2/token",
+        data=b"grant_type=client_credentials",
+        headers={
+            "Authorization": f"Basic {auth_value}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        method="POST",
+    )
+
+    try:
+        response_text = await asyncio.to_thread(
+            lambda: urllib_request.urlopen(request, timeout=20).read().decode("utf-8")
+        )
+        payload = json.loads(response_text)
+    except (urllib_error.URLError, json.JSONDecodeError) as exc:
+        logger.warning("PayPal access token request failed: %s", exc)
+        raise HTTPException(status_code=503, detail="Unable to authenticate with PayPal") from exc
+
+    access_token = payload.get("access_token")
+    if not access_token:
+        raise HTTPException(status_code=503, detail="PayPal access token missing")
+    return access_token
+
+
+async def verify_paypal_webhook_signature(request: Request, event: dict) -> bool:
+    credentials = get_paypal_credentials()
+    if not credentials["webhook_id"]:
+        return True
+
+    access_token = await get_paypal_access_token()
+    verification_payload = {
+        "auth_algo": request.headers.get("paypal-auth-algo"),
+        "cert_url": request.headers.get("paypal-cert-url"),
+        "transmission_id": request.headers.get("paypal-transmission-id"),
+        "transmission_sig": request.headers.get("paypal-transmission-sig"),
+        "transmission_time": request.headers.get("paypal-transmission-time"),
+        "webhook_id": credentials["webhook_id"],
+        "webhook_event": event,
+    }
+
+    verification_request = urllib_request.Request(
+        f"{get_paypal_api_base_url()}/v1/notifications/verify-webhook-signature",
+        data=json.dumps(verification_payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        response_text = await asyncio.to_thread(
+            lambda: urllib_request.urlopen(verification_request, timeout=20).read().decode("utf-8")
+        )
+        payload = json.loads(response_text)
+    except (urllib_error.URLError, json.JSONDecodeError) as exc:
+        logger.warning("PayPal webhook verification failed: %s", exc)
+        return False
+
+    return payload.get("verification_status") == "SUCCESS"
+
+
+def parse_paypal_datetime(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+        except ValueError:
+            return None
+    return None
+
+
+def map_paypal_subscription_status(event_type: str, resource: dict) -> str:
+    paypal_status = str(resource.get("status") or "").strip().upper()
+    if paypal_status == "ACTIVE":
+        return "active"
+    if paypal_status in {"SUSPENDED", "APPROVAL_PENDING"}:
+        return "past_due"
+    if paypal_status in {"CANCELLED", "CANCELED"}:
+        return "canceled"
+    if paypal_status == "EXPIRED":
+        return "deactivated"
+
+    if event_type in {"BILLING.SUBSCRIPTION.ACTIVATED", "PAYMENT.SALE.COMPLETED"}:
+        return "active"
+    if event_type == "BILLING.SUBSCRIPTION.PAYMENT.FAILED":
+        return "past_due"
+    if event_type == "BILLING.SUBSCRIPTION.SUSPENDED":
+        return "past_due"
+    if event_type == "BILLING.SUBSCRIPTION.CANCELLED":
+        return "canceled"
+    if event_type == "BILLING.SUBSCRIPTION.EXPIRED":
+        return "deactivated"
+    return "inactive"
+
+
+async def find_company_for_paypal_event(event: dict) -> Optional[dict]:
+    resource = event.get("resource") if isinstance(event.get("resource"), dict) else {}
+    company_id = (
+        resource.get("custom_id")
+        or resource.get("custom")
+        or resource.get("invoice_id")
+        or resource.get("id")
+    )
+    if company_id:
+        company = await get_company_record(str(company_id))
+        if company:
+            return company
+
+    subscription_id = resource.get("id") or resource.get("billing_agreement_id")
+    if subscription_id:
+        company = await db.companies.find_one({"billing.paypal_subscription_id": subscription_id})
+        if company:
+            return await get_company_record(company["id"])
+
+    payer = resource.get("subscriber") if isinstance(resource.get("subscriber"), dict) else {}
+    payer_object = resource.get("payer") if isinstance(resource.get("payer"), dict) else {}
+    email = payer.get("email_address") or resource.get("email_address") or payer_object.get("email_address")
+    if email:
+        cleaned = str(email).strip().lower()
+        user = await db.users.find_one({"email": cleaned})
+        if user and user.get("company_id"):
+            return await get_company_record(user["company_id"])
+
+    return None
+
+
+async def apply_paypal_event_to_company(event: dict) -> Optional[dict]:
+    company = await find_company_for_paypal_event(event)
+    if not company:
+        logger.warning("PayPal event could not be matched to a company workspace")
+        return None
+
+    resource = event.get("resource") if isinstance(event.get("resource"), dict) else {}
+    event_type = event.get("event_type") or event.get("eventType") or "unknown"
+    plan = resolve_plan_from_paypal_plan_id(resource.get("plan_id")) or resolve_plan_from_paypal_plan_id(
+        company.get("billing", {}).get("paypal_plan_id")
+    )
+    state = map_paypal_subscription_status(event_type, resource)
+    access_state = "active" if state in {"active", "trial"} else "inactive"
+    if state == "canceled":
+        access_state = "grace"
+    elif state in {"past_due", "deactivated"}:
+        access_state = "suspended"
+
+    subscriber = resource.get("subscriber") if isinstance(resource.get("subscriber"), dict) else {}
+    timestamp = parse_paypal_datetime(event.get("create_time")) or datetime.utcnow()
+
+    billing_updates = {
+        "provider": "paypal",
+        "subscription_status": state,
+        "access_state": access_state,
+        "customer_email": (subscriber.get("email_address") or company.get("billing", {}).get("customer_email") or "").strip().lower() or None,
+        "paypal_subscription_id": resource.get("id") or company.get("billing", {}).get("paypal_subscription_id"),
+        "paypal_plan_id": resource.get("plan_id") or company.get("billing", {}).get("paypal_plan_id"),
+        "paypal_order_id": resource.get("order_id") or company.get("billing", {}).get("paypal_order_id"),
+        "management_url": resource.get("links", [{}])[0].get("href") if isinstance(resource.get("links"), list) and resource.get("links") else company.get("billing", {}).get("management_url"),
+        "last_event_type": event_type,
+        "last_event_id": event.get("id") or resource.get("id"),
+        "last_event_at": timestamp,
+        "live_mode": get_paypal_environment() == "live",
+    }
+
+    if plan:
+        billing_updates["plan_id"] = plan["plan_id"]
+        billing_updates["plan_name"] = plan["display_name"]
+        billing_updates["product_path"] = plan["product_path"]
+
+    if event_type in {"BILLING.SUBSCRIPTION.ACTIVATED", "PAYMENT.SALE.COMPLETED"}:
+        billing_updates["last_charge_at"] = timestamp
+        billing_updates["canceled_at"] = None
+        billing_updates["deactivated_at"] = None
+    if event_type == "BILLING.SUBSCRIPTION.CANCELLED":
+        billing_updates["canceled_at"] = timestamp
+    if event_type in {"BILLING.SUBSCRIPTION.EXPIRED", "BILLING.SUBSCRIPTION.SUSPENDED"}:
+        billing_updates["deactivated_at"] = timestamp
+
+    updated_company = await update_company_billing(company["id"], billing_updates)
+
+    if updated_company:
+        await db.users.update_many(
+            {"company_id": company["id"], "role": {"$in": ["super_admin", "hr_admin", "hr"]}},
+            {"$set": {"subscription_status": state, "subscription_plan": billing_updates.get("plan_name")}},
+        )
+
+    return updated_company
 
 
 async def ensure_company_for_user(user: dict) -> Optional[str]:
@@ -1936,6 +2193,7 @@ class BillingPlanResponse(BaseModel):
     plan_id: str
     display_name: str
     product_path: str
+    paypal_plan_id: Optional[str] = None
     price_usd: float
     employee_range: str
     employee_limit: int
@@ -1952,6 +2210,11 @@ class CompanyBillingResponse(BaseModel):
     plan_name: Optional[str] = None
     product_path: Optional[str] = None
     customer_email: Optional[str] = None
+    paypal_client_id: Optional[str] = None
+    paypal_environment: str = "live"
+    paypal_subscription_id: Optional[str] = None
+    paypal_plan_id: Optional[str] = None
+    paypal_order_id: Optional[str] = None
     fastspring_account_id: Optional[str] = None
     fastspring_subscription_id: Optional[str] = None
     fastspring_order_id: Optional[str] = None
@@ -2091,6 +2354,8 @@ class EmployeeUpdate(BaseModel):
 class EmployeeResponse(BaseModel):
     id: str
     user_id: Optional[str] = None
+    login_ready: bool = False
+    login_message: Optional[str] = None
     employee_id: str
     first_name: str
     last_name: str
@@ -2963,6 +3228,59 @@ async def ensure_employee_user_account(
     })
     return user_id
 
+
+async def resolve_employee_user_account(employee: dict) -> Optional[dict]:
+    normalized_email = (employee.get("email") or "").strip().lower()
+    user = None
+
+    if employee.get("user_id"):
+        user = await db.users.find_one({"id": employee["user_id"]})
+
+    if not user and normalized_email:
+        user = await db.users.find_one({"email": normalized_email})
+
+    if not user:
+        return None
+
+    now = datetime.utcnow()
+    user_updates: Dict[str, Any] = {}
+
+    if normalized_email and user.get("email") != normalized_email:
+        user_updates["email"] = normalized_email
+    if employee.get("first_name") and user.get("first_name") != employee.get("first_name"):
+        user_updates["first_name"] = employee.get("first_name")
+    if employee.get("last_name") and user.get("last_name") != employee.get("last_name"):
+        user_updates["last_name"] = employee.get("last_name")
+    if employee.get("role") and user.get("role") != employee.get("role"):
+        user_updates["role"] = employee.get("role")
+    if employee.get("id") and user.get("employee_id") != employee.get("id"):
+        user_updates["employee_id"] = employee.get("id")
+    if employee.get("company_id") and user.get("company_id") != employee.get("company_id"):
+        user_updates["company_id"] = employee.get("company_id")
+
+    if user_updates:
+        user_updates["updated_at"] = now
+        await db.users.update_one({"id": user["id"]}, {"$set": user_updates})
+        user = await db.users.find_one({"id": user["id"]})
+
+    if employee.get("user_id") != user["id"]:
+        await db.employees.update_one(
+            {"id": employee["id"]},
+            {"$set": {"user_id": user["id"], "updated_at": now}},
+        )
+        employee["user_id"] = user["id"]
+
+    return user
+
+
+async def get_employee_login_access(employee: dict) -> tuple[bool, str]:
+    user = await resolve_employee_user_account(employee)
+    if not user:
+        return False, "No login account yet. Assign a temporary password so this employee can sign in."
+    if not user.get("password_hash"):
+        return False, "Login account exists, but no password is set yet. Reset the temporary password to activate sign-in."
+    return True, "Login ready"
+
 async def sync_shift_clock_in_to_attendance(employee: dict, local_time: Optional[str], timezone: Optional[str], latitude: Optional[float], longitude: Optional[float], clock_in_time: datetime):
     today = clock_in_time.strftime("%Y-%m-%d")
     existing = await db.attendance.find_one({"employee_id": employee["id"], "date": today, "company_id": employee.get("company_id")})
@@ -3135,7 +3453,22 @@ async def contact_us(payload: ContactRequest):
 @api_router.post("/auth/login", response_model=TokenResponse)
 async def login(credentials: UserLogin):
     user = await db.users.find_one({"email": credentials.email.lower()})
-    if not user or not verify_password(credentials.password, user["password_hash"]):
+    if not user:
+        employee = await db.employees.find_one({"email": credentials.email.lower()})
+        if employee:
+            raise HTTPException(
+                status_code=401,
+                detail="This employee account is not ready for sign-in yet. Ask HR to assign or reset a temporary password.",
+            )
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    if not user.get("password_hash"):
+        raise HTTPException(
+            status_code=401,
+            detail="This account does not have a password set yet. Ask HR to reset the temporary password.",
+        )
+
+    if not verify_password(credentials.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
     # Set token expiry based on remember_me
@@ -3195,6 +3528,8 @@ async def get_company_billing(current_user: dict = Depends(require_admin)):
         raise HTTPException(status_code=404, detail="Company workspace not found")
 
     billing = company.get("billing") or build_default_company_billing()
+    paypal_environment = get_paypal_environment()
+    paypal_client_id = os.environ.get("PAYPAL_CLIENT_ID", "").strip() or None
     storefront_environment = os.environ.get("FASTSPRING_STOREFRONT_ENV", "test").strip() or "test"
     storefront_script_url = os.environ.get(
         "FASTSPRING_SCRIPT_URL",
@@ -3208,13 +3543,18 @@ async def get_company_billing(current_user: dict = Depends(require_admin)):
     return CompanyBillingResponse(
         company_id=company["id"],
         company_name=company["name"],
-        billing_provider=billing.get("provider", "fastspring"),
+        billing_provider="paypal",
         subscription_status=billing.get("subscription_status", "inactive"),
         access_state=billing.get("access_state", "inactive"),
         plan_id=billing.get("plan_id"),
         plan_name=billing.get("plan_name"),
         product_path=billing.get("product_path"),
         customer_email=billing.get("customer_email"),
+        paypal_client_id=paypal_client_id,
+        paypal_environment=paypal_environment,
+        paypal_subscription_id=billing.get("paypal_subscription_id"),
+        paypal_plan_id=billing.get("paypal_plan_id"),
+        paypal_order_id=billing.get("paypal_order_id"),
         fastspring_account_id=billing.get("fastspring_account_id"),
         fastspring_subscription_id=billing.get("fastspring_subscription_id"),
         fastspring_order_id=billing.get("fastspring_order_id"),
@@ -3232,7 +3572,7 @@ async def get_company_billing(current_user: dict = Depends(require_admin)):
         checkout_email=current_user.get("email"),
         checkout_first_name=current_user.get("first_name"),
         checkout_last_name=current_user.get("last_name"),
-        plans=[BillingPlanResponse(**plan) for plan in FASTSPRING_PLAN_CATALOG],
+        plans=[BillingPlanResponse(**plan) for plan in get_paypal_plan_catalog()],
     )
 
 
@@ -3282,6 +3622,36 @@ async def fastspring_webhook(request: Request):
             applied += 1
 
     return {"processed": processed, "applied": applied}
+
+
+@api_router.post("/billing/paypal/webhook")
+async def paypal_webhook(request: Request):
+    raw_body = await request.body()
+    try:
+        event = json.loads(raw_body.decode("utf-8") or "{}")
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
+
+    if not await verify_paypal_webhook_signature(request, event):
+        raise HTTPException(status_code=401, detail="Invalid PayPal webhook signature")
+
+    event_id = event.get("id") or str(uuid.uuid4())
+    duplicate = await db.paypal_webhook_events.find_one({"event_id": event_id})
+    if duplicate:
+        return {"processed": 1, "applied": 0, "duplicate": True}
+
+    await db.paypal_webhook_events.insert_one(
+        {
+            "id": str(uuid.uuid4()),
+            "event_id": event_id,
+            "event_type": event.get("event_type") or event.get("eventType") or "unknown",
+            "payload": event,
+            "received_at": datetime.utcnow(),
+        }
+    )
+
+    company = await apply_paypal_event_to_company(event)
+    return {"processed": 1, "applied": 1 if company else 0}
 
 
 @api_router.post("/notifications/push-token")
@@ -4526,6 +4896,8 @@ async def create_employee(emp: EmployeeCreate, current_user: dict = Depends(requ
         company_id=company_id,
         existing_user_id=emp.user_id,
     )
+    login_ready = bool(user_id)
+    login_message = "Login ready" if login_ready else "No login account yet. Assign a temporary password so this employee can sign in."
     
     employee = {
         "id": emp_id,
@@ -4570,6 +4942,8 @@ async def create_employee(emp: EmployeeCreate, current_user: dict = Depends(requ
     return EmployeeResponse(
         id=emp_id,
         user_id=user_id,
+        login_ready=login_ready,
+        login_message=login_message,
         employee_id=emp.employee_id,
         first_name=emp.first_name,
         last_name=emp.last_name,
@@ -4646,9 +5020,12 @@ async def get_employees(
     result = []
     for emp in employees:
         leave_balance_summary = summarize_leave_balance(emp, leave_types)
+        login_ready, login_message = await get_employee_login_access(emp)
         result.append(EmployeeResponse(
             id=emp["id"],
             user_id=emp.get("user_id"),
+            login_ready=login_ready,
+            login_message=login_message,
             employee_id=emp["employee_id"],
             first_name=emp["first_name"],
             last_name=emp["last_name"],
@@ -4705,10 +5082,13 @@ async def get_employee(emp_id: str, current_user: dict = Depends(get_current_use
         manager = await db.employees.find_one({"id": emp["manager_id"]})
         if manager:
             manager_name = f"{manager['first_name']} {manager['last_name']}"
+    login_ready, login_message = await get_employee_login_access(emp)
     
     return EmployeeResponse(
         id=emp["id"],
         user_id=emp.get("user_id"),
+        login_ready=login_ready,
+        login_message=login_message,
         employee_id=emp["employee_id"],
         first_name=emp["first_name"],
         last_name=emp["last_name"],

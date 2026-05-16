@@ -12,7 +12,7 @@ import {
   Wallet,
 } from 'lucide-react'
 import api from '../lib/api'
-import { openFastSpringCheckout } from '../lib/fastspring'
+import { openPayPalSubscriptionCheckout } from '../lib/paypal'
 import { hasActiveSubscription } from '../lib/roles'
 
 function formatDateTime(value) {
@@ -56,19 +56,18 @@ export default function Billing() {
   const handleCheckout = async (plan) => {
     setLaunchingPlan(plan.plan_id)
     try {
-      await openFastSpringCheckout({
-        productPath: plan.product_path,
-        scriptUrl: data?.storefront_script_url,
-        storefront: data?.storefront_value,
+      await openPayPalSubscriptionCheckout({
+        clientId: data?.paypal_client_id,
+        environment: data?.paypal_environment,
+        plan,
         customerEmail: data?.checkout_email || data?.customer_email,
-        firstName: data?.checkout_first_name,
-        lastName: data?.checkout_last_name,
         companyId: data?.company_id,
-        companyName: data?.company_name,
-        planId: plan.plan_id,
+        onApproved: async () => {
+          await refetch()
+        },
       })
     } catch (error) {
-      console.error('Failed to open FastSpring checkout:', error)
+      console.error('Failed to open PayPal checkout:', error)
       alert(error.message || 'Unable to open the billing checkout right now.')
     } finally {
       setLaunchingPlan(null)
@@ -120,7 +119,7 @@ export default function Billing() {
             onClick={() => {
               const link = data?.management_url || data?.invoice_url
               if (!link) {
-                alert('A FastSpring management link will appear here after the billing account is fully available.')
+                alert('A PayPal subscription link will appear here after the billing account is fully available.')
                 return
               }
               window.open(link, '_blank', 'noopener,noreferrer')
@@ -175,12 +174,12 @@ export default function Billing() {
         <div className="card">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-sm text-gray-500">FastSpring Mode</p>
+              <p className="text-sm text-gray-500">PayPal Mode</p>
               <p className="text-xl font-bold text-gray-900 mt-2">
-                {data?.storefront_environment === 'live' ? 'Live Storefront' : 'Test Storefront'}
+                {data?.paypal_environment === 'live' ? 'Live Checkout' : 'Sandbox Checkout'}
               </p>
               <p className="text-sm text-gray-500 mt-2">
-                {data?.storefront_value}
+                {data?.paypal_client_id ? 'Client ID configured' : 'Client ID missing'}
               </p>
             </div>
             <div className="p-3 rounded-2xl bg-amber-50">
@@ -195,7 +194,7 @@ export default function Billing() {
           <div className="flex items-start justify-between gap-4 mb-6">
             <div>
               <h2 className="text-xl font-semibold text-gray-900">Choose or upgrade your plan</h2>
-            <p className="text-sm text-gray-500 mt-1">Use the same FastSpring checkout from inside your HR dashboard to activate or upgrade this workspace.</p>
+            <p className="text-sm text-gray-500 mt-1">Use PayPal Subscriptions to activate or upgrade this workspace.</p>
           </div>
             <div className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${getStatusTone(data?.subscription_status)}`}>
               {formatStatusLabel(data?.access_state)}
@@ -206,7 +205,7 @@ export default function Billing() {
             <div className="mb-6 rounded-3xl border border-primary-100 bg-primary-50 px-5 py-4">
               <p className="text-sm font-semibold text-primary-700">Complete your plan setup to unlock the HR dashboard</p>
               <p className="mt-1 text-sm text-primary-600">
-                Your company workspace has been created. Once payment succeeds and FastSpring sends the webhook back, this page will refresh and unlock full HR dashboard access automatically.
+                Your company workspace has been created. Once PayPal confirms the subscription, this page will refresh and unlock full HR dashboard access automatically.
               </p>
             </div>
           )}
@@ -214,6 +213,7 @@ export default function Billing() {
           <div className="grid xl:grid-cols-3 gap-4">
             {plans.map((plan) => {
               const isCurrent = currentPlanId === plan.plan_id
+              const isPlanConfigured = Boolean(plan.paypal_plan_id)
               return (
                 <div
                   key={plan.plan_id}
@@ -247,9 +247,9 @@ export default function Billing() {
                   <button
                     type="button"
                     onClick={() => handleCheckout(plan)}
-                    disabled={launchingPlan === plan.plan_id || isCurrent}
+                    disabled={launchingPlan === plan.plan_id || isCurrent || !isPlanConfigured}
                     className={`mt-8 inline-flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold transition-colors ${
-                      isCurrent
+                      isCurrent || !isPlanConfigured
                         ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
                         : 'bg-primary-500 text-white hover:bg-primary-600'
                     }`}
@@ -261,6 +261,8 @@ export default function Billing() {
                       </>
                     ) : isCurrent ? (
                       'Current Plan'
+                    ) : !isPlanConfigured ? (
+                      'PayPal plan missing'
                     ) : (
                       <>
                         {currentPlanId ? `Switch to ${plan.display_name.replace('Emplora ', '')}` : `Choose ${plan.display_name.replace('Emplora ', '')}`}
@@ -292,8 +294,12 @@ export default function Billing() {
                 <p className="text-sm font-medium text-gray-800 mt-1">{formatDateTime(data?.last_charge_at)}</p>
               </div>
               <div>
-                <p className="text-xs uppercase tracking-wide text-gray-400">FastSpring Subscription ID</p>
-                <p className="text-sm font-medium text-gray-800 mt-1 break-all">{data?.fastspring_subscription_id || 'Will populate after activation'}</p>
+                <p className="text-xs uppercase tracking-wide text-gray-400">PayPal Subscription ID</p>
+                <p className="text-sm font-medium text-gray-800 mt-1 break-all">{data?.paypal_subscription_id || 'Will populate after activation'}</p>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-wide text-gray-400">PayPal Plan ID</p>
+                <p className="text-sm font-medium text-gray-800 mt-1 break-all">{data?.paypal_plan_id || 'Will populate after activation'}</p>
               </div>
             </div>
           </div>
@@ -301,7 +307,7 @@ export default function Billing() {
           <div className="card bg-slate-950 text-white">
             <h2 className="text-lg font-semibold">Webhook-ready workspace</h2>
             <p className="mt-3 text-sm leading-6 text-slate-300">
-              Once FastSpring posts webhook events to your backend, this company workspace updates automatically for new paid signups, rebills, canceled subscriptions, and failed charges.
+              Once PayPal posts webhook events to your backend, this company workspace updates automatically for new paid signups, rebills, canceled subscriptions, and failed charges.
             </p>
             <div className="mt-5 space-y-3 text-sm text-slate-200">
               <div className="flex items-start gap-2">
@@ -323,7 +329,7 @@ export default function Billing() {
             </div>
             {!hasManagementUrl && (
               <p className="mt-5 text-xs text-slate-400">
-                A FastSpring management or invoice link will appear here once your store sends the first full webhook payload back to Emplora.
+                A PayPal subscription link will appear here once PayPal sends the first full webhook payload back to Emplora.
               </p>
             )}
           </div>
