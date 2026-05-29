@@ -665,6 +665,7 @@ export default function Home() {
                 <li><button onClick={() => scrollToSection('pricing')} className="text-gray-400 hover:text-white transition-colors">Pricing</button></li>
                 <li><button onClick={() => scrollToSection('benefits')} className="text-gray-400 hover:text-white transition-colors">Benefits</button></li>
                 <li><button onClick={() => scrollToSection('testimonials')} className="text-gray-400 hover:text-white transition-colors">Reviews</button></li>
+                <li><button onClick={() => navigate('/recommendations')} className="text-gray-400 hover:text-white transition-colors">Recommendations</button></li>
                 <li><button onClick={() => navigate('/login')} className="text-gray-400 hover:text-white transition-colors">Sign In</button></li>
               </ul>
             </div>
