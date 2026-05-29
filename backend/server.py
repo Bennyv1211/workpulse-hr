@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timedelta, date
+from zoneinfo import ZoneInfo
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 import re
@@ -303,6 +304,10 @@ class EmployeeCreate(BaseModel):
     hourly_rate: Optional[float] = None
     skills: Optional[List[str]] = []
     notes: Optional[str] = None
+    annual_leave_days: Optional[float] = None
+    sick_leave_days: Optional[float] = None
+    maternity_leave_days: Optional[float] = None
+    paternity_leave_days: Optional[float] = None
 
 class EmployeeResponse(BaseModel):
     id: str
@@ -346,6 +351,12 @@ class LeaveTypeCreate(BaseModel):
     is_paid: bool = True
     requires_approval: bool = True
     color: str = "#3B82F6"
+
+class LeaveBalanceUpdate(BaseModel):
+    annual_leave_days: Optional[float] = None
+    sick_leave_days: Optional[float] = None
+    maternity_leave_days: Optional[float] = None
+    paternity_leave_days: Optional[float] = None
 
 class LeaveTypeResponse(BaseModel):
     id: str
@@ -573,9 +584,139 @@ def map_leave_status_to_time_off_status(status_value: str) -> str:
         return "denied"
     return status_value
 
-async def sync_shift_clock_in_to_attendance(employee: dict, local_time: Optional[str], timezone: Optional[str], latitude: Optional[float], longitude: Optional[float], clock_in_time: datetime):
-    today = clock_in_time.strftime("%Y-%m-%d")
+def get_zoneinfo(timezone_name: Optional[str]) -> Optional[ZoneInfo]:
+    if not timezone_name:
+        return None
+    try:
+        return ZoneInfo(timezone_name)
+    except Exception:
+        return None
+
+def get_client_clock_datetimes(local_time: Optional[str], timezone_name: Optional[str]) -> tuple[datetime, datetime]:
+    timezone_info = get_zoneinfo(timezone_name)
+
+    if local_time:
+        try:
+            parsed = datetime.fromisoformat(local_time.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone_info)
+            elif timezone_info:
+                parsed = parsed.astimezone(timezone_info)
+            local_dt = parsed if timezone_info is None else parsed.astimezone(timezone_info)
+            utc_dt = local_dt.astimezone(ZoneInfo("UTC")) if local_dt.tzinfo else datetime.utcnow()
+            return utc_dt.replace(tzinfo=None), (
+                local_dt.replace(tzinfo=None) if local_dt.tzinfo else local_dt
+            )
+        except Exception:
+            pass
+
+    now_utc = datetime.utcnow()
+    if timezone_info:
+        fallback_local = now_utc.replace(tzinfo=ZoneInfo("UTC")).astimezone(timezone_info).replace(tzinfo=None)
+    else:
+        fallback_local = now_utc
+    return now_utc, fallback_local
+
+def get_attendance_status_for_local_clock_in(local_dt: datetime) -> str:
+    if local_dt.hour > 9 or (local_dt.hour == 9 and local_dt.minute > 15):
+        return "late"
+    return "present"
+
+CORE_LEAVE_TYPE_DEFINITIONS = [
+    {
+        "slug": "annual_leave",
+        "name": "Annual Leave",
+        "description": "Paid vacation days",
+        "days_per_year": 10,
+        "is_paid": True,
+        "requires_approval": True,
+        "color": "#3B82F6",
+    },
+    {
+        "slug": "sick_leave",
+        "name": "Sick Leave",
+        "description": "Paid sick time",
+        "days_per_year": 10,
+        "is_paid": True,
+        "requires_approval": True,
+        "color": "#EF4444",
+    },
+    {
+        "slug": "maternity_leave",
+        "name": "Maternity Leave",
+        "description": "Optional maternity leave balance",
+        "days_per_year": 0,
+        "is_paid": True,
+        "requires_approval": True,
+        "color": "#EC4899",
+    },
+    {
+        "slug": "paternity_leave",
+        "name": "Paternity Leave",
+        "description": "Optional paternity leave balance",
+        "days_per_year": 0,
+        "is_paid": True,
+        "requires_approval": True,
+        "color": "#14B8A6",
+    },
+]
+
+async def ensure_core_leave_types() -> Dict[str, dict]:
+    leave_type_map: Dict[str, dict] = {}
+
+    for definition in CORE_LEAVE_TYPE_DEFINITIONS:
+        leave_type = await db.leave_types.find_one({"name": definition["name"]})
+        if not leave_type:
+            leave_type = {
+                "id": str(uuid.uuid4()),
+                "name": definition["name"],
+                "description": definition["description"],
+                "days_per_year": definition["days_per_year"],
+                "is_paid": definition["is_paid"],
+                "requires_approval": definition["requires_approval"],
+                "color": definition["color"],
+                "created_at": datetime.utcnow(),
+            }
+            await db.leave_types.insert_one(leave_type)
+        leave_type_map[definition["slug"]] = leave_type
+
+    return leave_type_map
+
+async def build_employee_leave_balance(
+    annual_leave_days: Optional[float] = None,
+    sick_leave_days: Optional[float] = None,
+    maternity_leave_days: Optional[float] = None,
+    paternity_leave_days: Optional[float] = None,
+) -> Dict[str, float]:
+    leave_types = await ensure_core_leave_types()
+
+    return {
+        leave_types["annual_leave"]["id"]: float(
+            annual_leave_days
+            if annual_leave_days is not None
+            else leave_types["annual_leave"].get("days_per_year", 10)
+        ),
+        leave_types["sick_leave"]["id"]: float(
+            sick_leave_days
+            if sick_leave_days is not None
+            else leave_types["sick_leave"].get("days_per_year", 10)
+        ),
+        leave_types["maternity_leave"]["id"]: float(
+            maternity_leave_days
+            if maternity_leave_days is not None
+            else leave_types["maternity_leave"].get("days_per_year", 0)
+        ),
+        leave_types["paternity_leave"]["id"]: float(
+            paternity_leave_days
+            if paternity_leave_days is not None
+            else leave_types["paternity_leave"].get("days_per_year", 0)
+        ),
+    }
+
+async def sync_shift_clock_in_to_attendance(employee: dict, local_time: Optional[str], timezone: Optional[str], latitude: Optional[float], longitude: Optional[float], clock_in_time: datetime, local_clock_in_time: datetime):
+    today = local_clock_in_time.strftime("%Y-%m-%d")
     existing = await db.attendance.find_one({"employee_id": employee["id"], "date": today})
+    status = get_attendance_status_for_local_clock_in(local_clock_in_time)
 
     payload = {
         "employee_id": employee["id"],
@@ -584,7 +725,7 @@ async def sync_shift_clock_in_to_attendance(employee: dict, local_time: Optional
         "clock_in_local": local_time,
         "timezone": timezone,
         "clock_in_location": {"latitude": latitude, "longitude": longitude} if latitude is not None and longitude is not None else None,
-        "status": "present",
+        "status": status,
         "updated_at": datetime.utcnow(),
     }
 
@@ -606,7 +747,8 @@ async def sync_shift_clock_in_to_attendance(employee: dict, local_time: Optional
     return attendance_id
 
 async def sync_shift_clock_out_to_attendance(employee: dict, local_time: Optional[str], timezone: Optional[str], latitude: Optional[float], longitude: Optional[float], clock_out_time: datetime, work_hours: float):
-    today = clock_out_time.strftime("%Y-%m-%d")
+    _, local_clock_out_time = get_client_clock_datetimes(local_time, timezone)
+    today = local_clock_out_time.strftime("%Y-%m-%d")
     existing = await db.attendance.find_one({"employee_id": employee["id"], "date": today})
 
     payload = {
@@ -615,9 +757,13 @@ async def sync_shift_clock_out_to_attendance(employee: dict, local_time: Optiona
         "timezone": timezone,
         "clock_out_location": {"latitude": latitude, "longitude": longitude} if latitude is not None and longitude is not None else None,
         "total_hours": work_hours,
-        "status": "present",
         "updated_at": datetime.utcnow(),
     }
+
+    if existing and existing.get("status"):
+        payload["status"] = existing["status"]
+    else:
+        payload["status"] = "present"
 
     if existing:
         await db.attendance.update_one({"id": existing["id"]}, {"$set": payload})
@@ -768,6 +914,12 @@ async def get_current_shift(current_user: dict = Depends(get_current_user)):
         "date": today,
         "status": {"$in": ["working", "on_break"]}
     })
+
+    if not shift:
+        shift = await db.shifts.find_one({
+            "employee_id": employee["id"],
+            "status": {"$in": ["working", "on_break"]}
+        })
     
     if not shift:
         return None
@@ -792,7 +944,8 @@ async def shift_clock_in(data: ShiftClockRequest, current_user: dict = Depends(g
     if not employee:
         raise HTTPException(status_code=400, detail="Employee profile not found")
     
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    clock_in_time, local_clock_in_time = get_client_clock_datetimes(data.local_time, data.timezone)
+    today = local_clock_in_time.strftime("%Y-%m-%d")
     
     # Check for existing active shift
     existing = await db.shifts.find_one({
@@ -805,7 +958,6 @@ async def shift_clock_in(data: ShiftClockRequest, current_user: dict = Depends(g
         raise HTTPException(status_code=400, detail="You already have an active shift")
     
     shift_id = str(uuid.uuid4())
-    clock_in_time = datetime.utcnow()
     shift = {
         "id": shift_id,
         "employee_id": employee["id"],
@@ -831,6 +983,7 @@ async def shift_clock_in(data: ShiftClockRequest, current_user: dict = Depends(g
         latitude=data.latitude,
         longitude=data.longitude,
         clock_in_time=clock_in_time,
+        local_clock_in_time=local_clock_in_time,
     )
     await log_activity(current_user["id"], "shift_clock_in", f"Clocked in at {data.local_time}")
     
@@ -853,12 +1006,19 @@ async def shift_clock_out(data: ShiftClockRequest, current_user: dict = Depends(
     if not employee:
         raise HTTPException(status_code=400, detail="Employee profile not found")
     
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    clock_out_time, local_clock_out_time = get_client_clock_datetimes(data.local_time, data.timezone)
+    today = local_clock_out_time.strftime("%Y-%m-%d")
     shift = await db.shifts.find_one({
         "employee_id": employee["id"],
         "date": today,
         "status": {"$in": ["working", "on_break"]}
     })
+
+    if not shift:
+        shift = await db.shifts.find_one({
+            "employee_id": employee["id"],
+            "status": {"$in": ["working", "on_break"]}
+        })
     
     if not shift:
         raise HTTPException(status_code=400, detail="No active shift found")
@@ -866,7 +1026,6 @@ async def shift_clock_out(data: ShiftClockRequest, current_user: dict = Depends(
     if shift["status"] == "on_break":
         raise HTTPException(status_code=400, detail="Please end your break before clocking out")
     
-    clock_out_time = datetime.utcnow()
     clock_in_time = shift["clock_in"]["timestamp"]
     total_seconds = (clock_out_time - clock_in_time).total_seconds()
     work_seconds = total_seconds - shift.get("total_break_seconds", 0)
@@ -909,12 +1068,19 @@ async def start_break(data: ShiftClockRequest, current_user: dict = Depends(get_
     if not employee:
         raise HTTPException(status_code=400, detail="Employee profile not found")
     
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    _, local_now = get_client_clock_datetimes(data.local_time, data.timezone)
+    today = local_now.strftime("%Y-%m-%d")
     shift = await db.shifts.find_one({
         "employee_id": employee["id"],
         "date": today,
         "status": "working"
     })
+
+    if not shift:
+        shift = await db.shifts.find_one({
+            "employee_id": employee["id"],
+            "status": "working"
+        })
     
     if not shift:
         raise HTTPException(status_code=400, detail="You must be clocked in to start a break")
@@ -958,12 +1124,19 @@ async def end_break(data: ShiftClockRequest, current_user: dict = Depends(get_cu
     if not employee:
         raise HTTPException(status_code=400, detail="Employee profile not found")
     
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    _, local_now = get_client_clock_datetimes(data.local_time, data.timezone)
+    today = local_now.strftime("%Y-%m-%d")
     shift = await db.shifts.find_one({
         "employee_id": employee["id"],
         "date": today,
         "status": "on_break"
     })
+
+    if not shift:
+        shift = await db.shifts.find_one({
+            "employee_id": employee["id"],
+            "status": "on_break"
+        })
     
     if not shift:
         raise HTTPException(status_code=400, detail="You are not currently on a break")
@@ -1345,7 +1518,7 @@ async def send_paystubs(payload: PaystubBulkSend, current_user: dict = Depends(r
 @api_router.get("/paystubs/{paystub_id}/download")
 async def download_paystub(paystub_id: str, token: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     """Download a paystub PDF"""
-    if current_user["role"] in ["super_admin", "hr_admin", "manager", "hr"]:
+    if current_user["role"] in ["super_admin", "hr_admin", "hr"]:
         paystub = await db.paystubs.find_one({"id": paystub_id})
     else:
         employee = await db.employees.find_one({"user_id": current_user["id"]})
@@ -1657,8 +1830,12 @@ async def create_employee(emp: EmployeeCreate, current_user: dict = Depends(requ
         if manager:
             manager_name = f"{manager['first_name']} {manager['last_name']}"
     
-    leave_types = await db.leave_types.find().to_list(100)
-    leave_balance = {lt["id"]: lt["days_per_year"] for lt in leave_types}
+    leave_balance = await build_employee_leave_balance(
+        annual_leave_days=emp.annual_leave_days,
+        sick_leave_days=emp.sick_leave_days,
+        maternity_leave_days=emp.maternity_leave_days,
+        paternity_leave_days=emp.paternity_leave_days,
+    )
     
     employee = {
         "id": emp_id,
@@ -1968,6 +2145,41 @@ async def update_employee(emp_id: str, emp_data: EmployeeCreate, current_user: d
     
     return await get_employee(emp_id, current_user)
 
+@api_router.put("/employees/{emp_id}/leave-balance", response_model=EmployeeResponse)
+async def update_employee_leave_balance(
+    emp_id: str,
+    balance_data: LeaveBalanceUpdate,
+    current_user: dict = Depends(require_admin)
+):
+    employee = await db.employees.find_one({"id": emp_id})
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    leave_balance = await build_employee_leave_balance(
+        annual_leave_days=balance_data.annual_leave_days,
+        sick_leave_days=balance_data.sick_leave_days,
+        maternity_leave_days=balance_data.maternity_leave_days,
+        paternity_leave_days=balance_data.paternity_leave_days,
+    )
+
+    await db.employees.update_one(
+        {"id": emp_id},
+        {
+            "$set": {
+                "leave_balance": leave_balance,
+                "updated_at": datetime.utcnow(),
+            }
+        },
+    )
+
+    await log_activity(
+        current_user["id"],
+        "employee_leave_balance_updated",
+        f"Updated leave balance for {employee.get('first_name', '')} {employee.get('last_name', '')}".strip(),
+    )
+
+    return await get_employee(emp_id, current_user)
+
 @api_router.delete("/employees/{emp_id}")
 async def delete_employee(emp_id: str, current_user: dict = Depends(require_admin)):
     emp = await db.employees.find_one({"id": emp_id})
@@ -2260,6 +2472,30 @@ async def update_leave_request(lr_id: str, update: LeaveRequestUpdate, current_u
             return req
     raise HTTPException(status_code=404, detail="Leave request not found after update")
 
+@api_router.delete("/leave-requests/{lr_id}")
+async def delete_leave_request(lr_id: str, current_user: dict = Depends(get_current_user)):
+    lr = await db.leave_requests.find_one({"id": lr_id})
+    if not lr:
+        raise HTTPException(status_code=404, detail="Leave request not found")
+
+    employee = await db.employees.find_one({"user_id": current_user["id"]})
+    if not employee:
+        employee = await db.employees.find_one({"email": current_user["email"]})
+
+    if current_user["role"] == "employee":
+        if not employee or lr["employee_id"] != employee["id"]:
+            raise HTTPException(status_code=403, detail="Not allowed to cancel this leave request")
+        if lr.get("status") != "pending":
+            raise HTTPException(status_code=400, detail="Only pending leave requests can be cancelled")
+
+    await db.leave_requests.delete_one({"id": lr_id})
+
+    if lr.get("source_time_off_request_id"):
+        await db.time_off_requests.delete_many({"id": lr["source_time_off_request_id"]})
+
+    await log_activity(current_user["id"], "leave_request_deleted", f"Deleted leave request {lr_id}")
+    return {"message": "Leave request deleted"}
+
 # ===== Attendance Routes with GPS =====
 @api_router.post("/attendance/clock-in", response_model=AttendanceResponse)
 async def clock_in(data: AttendanceClockIn, current_user: dict = Depends(get_current_user)):
@@ -2279,24 +2515,14 @@ async def clock_in(data: AttendanceClockIn, current_user: dict = Depends(get_cur
             })
             raise HTTPException(status_code=400, detail=f"Clock-in blocked: {message}")
     
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    now, local_now = get_client_clock_datetimes(data.local_time, data.timezone)
+    today = local_now.strftime("%Y-%m-%d")
     existing = await db.attendance.find_one({"employee_id": employee["id"], "date": today})
     if existing and existing.get("clock_in"):
         raise HTTPException(status_code=400, detail="Already clocked in today")
     
-    # Use local time from device if provided, otherwise use server time
-    if data.local_time:
-        try:
-            now = datetime.fromisoformat(data.local_time.replace('Z', '+00:00'))
-        except:
-            now = datetime.utcnow()
-    else:
-        now = datetime.utcnow()
-    
     att_id = str(uuid.uuid4())
-    status = "present"
-    if now.hour >= 9 and now.minute > 15:
-        status = "late"
+    status = get_attendance_status_for_local_clock_in(local_now)
     
     attendance = {
         "id": att_id,
@@ -2353,21 +2579,13 @@ async def clock_out(data: AttendanceClockOut, current_user: dict = Depends(get_c
             })
             raise HTTPException(status_code=400, detail=f"Clock-out blocked: {message}")
     
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    now, local_now = get_client_clock_datetimes(data.local_time, data.timezone)
+    today = local_now.strftime("%Y-%m-%d")
     attendance = await db.attendance.find_one({"employee_id": employee["id"], "date": today})
     if not attendance:
         raise HTTPException(status_code=400, detail="No clock-in record found for today")
     if attendance.get("clock_out"):
         raise HTTPException(status_code=400, detail="Already clocked out today")
-    
-    # Use local time from device if provided, otherwise use server time
-    if data.local_time:
-        try:
-            now = datetime.fromisoformat(data.local_time.replace('Z', '+00:00'))
-        except:
-            now = datetime.utcnow()
-    else:
-        now = datetime.utcnow()
     
     clock_in = attendance["clock_in"]
     total_hours = round((now - clock_in).total_seconds() / 3600, 2)
@@ -2553,6 +2771,144 @@ async def create_manual_attendance(data: AttendanceManualCreate, current_user: d
         created_at=attendance["created_at"]
     )
 
+@api_router.get("/manager/dashboard")
+async def get_manager_dashboard(
+    target_date: Optional[str] = None,
+    current_user: dict = Depends(require_manager)
+):
+    report_date = target_date or datetime.utcnow().strftime("%Y-%m-%d")
+
+    employees = await db.employees.find({"status": "active"}).to_list(1000)
+    employee_map = {employee["id"]: employee for employee in employees}
+    employee_names = {
+        employee["id"]: f"{employee.get('first_name', '')} {employee.get('last_name', '')}".strip() or "Employee"
+        for employee in employees
+    }
+    departments = {dept["id"]: dept["name"] for dept in await db.departments.find().to_list(200)}
+
+    attendance_rows = await db.attendance.find({"date": report_date}).to_list(1000)
+    shifts = await db.shifts.find({"date": report_date}).to_list(1000)
+
+    attendance_by_employee = {row["employee_id"]: row for row in attendance_rows}
+    shifts_by_employee = {shift["employee_id"]: shift for shift in shifts}
+
+    leave_types = {lt["id"]: lt["name"] for lt in await db.leave_types.find().to_list(100)}
+    leave_requests = await db.leave_requests.find({"status": "pending"}).sort("created_at", -1).to_list(100)
+    mirrored_time_off_ids = {
+        request.get("source_time_off_request_id")
+        for request in leave_requests
+        if request.get("source_time_off_request_id")
+    }
+    time_off_requests = await db.time_off_requests.find({"status": "pending"}).sort("created_at", -1).to_list(100)
+
+    pending_leave_requests = []
+    for request in leave_requests:
+        pending_leave_requests.append({
+            "id": request["id"],
+            "employee_id": request["employee_id"],
+            "employee_name": employee_names.get(request["employee_id"], "Employee"),
+            "leave_type_name": leave_types.get(request["leave_type_id"]) or request.get("leave_type_name") or ("Time Off" if request["leave_type_id"] == "time_off" else "Leave"),
+            "start_date": request["start_date"],
+            "end_date": request["end_date"],
+            "status": request["status"],
+            "reason": request.get("reason"),
+            "created_at": request["created_at"].isoformat() if isinstance(request["created_at"], datetime) else request["created_at"],
+        })
+
+    for request in time_off_requests:
+        if request["id"] in mirrored_time_off_ids:
+            continue
+        pending_leave_requests.append({
+            "id": request["id"],
+            "employee_id": request["employee_id"],
+            "employee_name": employee_names.get(request["employee_id"], "Employee"),
+            "leave_type_name": "Time Off",
+            "start_date": request["start_date"],
+            "end_date": request["end_date"],
+            "status": "pending",
+            "reason": request.get("note"),
+            "created_at": request["created_at"].isoformat() if isinstance(request["created_at"], datetime) else request["created_at"],
+        })
+
+    pending_leave_requests.sort(key=lambda item: item["created_at"], reverse=True)
+
+    employee_rows = []
+    working_count = 0
+    on_break_count = 0
+    clocked_out_count = 0
+    late_count = 0
+
+    for employee in employees:
+        attendance = attendance_by_employee.get(employee["id"])
+        shift = shifts_by_employee.get(employee["id"])
+
+        status = "clocked_out"
+        if shift and shift.get("status") in ["working", "on_break"]:
+            status = shift["status"]
+        elif attendance and attendance.get("clock_in") and not attendance.get("clock_out"):
+            status = "working"
+
+        total_hours = attendance.get("total_hours") if attendance else 0
+        if total_hours in [None, 0] and shift and shift.get("status") in ["working", "on_break"]:
+            clock_in_timestamp = shift.get("clock_in", {}).get("timestamp")
+            if clock_in_timestamp:
+                total_hours = round(
+                    max(
+                        0,
+                        (datetime.utcnow() - clock_in_timestamp).total_seconds() - shift.get("total_break_seconds", 0),
+                    ) / 3600,
+                    2,
+                )
+        total_hours = round(float(total_hours or 0), 2)
+
+        is_late = bool(attendance and attendance.get("status") == "late")
+        if is_late:
+            late_count += 1
+
+        if status == "working":
+            working_count += 1
+        elif status == "on_break":
+            on_break_count += 1
+        else:
+            clocked_out_count += 1
+
+        employee_rows.append({
+            "id": employee["id"],
+            "employee_id": employee.get("employee_id"),
+            "name": employee_names.get(employee["id"], "Employee"),
+            "department_name": departments.get(employee.get("department_id")),
+            "job_title": employee.get("job_title"),
+            "status": status,
+            "is_late_today": is_late,
+            "today_hours": total_hours,
+            "clock_in_local": (
+                shift.get("clock_in", {}).get("local_time")
+                if shift
+                else attendance.get("clock_in_local") if attendance else None
+            ),
+            "break_started_local": (
+                shift.get("current_break", {}).get("start_local")
+                if shift and shift.get("current_break")
+                else None
+            ),
+        })
+
+    employee_rows.sort(key=lambda item: (item["status"] != "working", item["status"] != "on_break", item["name"]))
+
+    return {
+        "date": report_date,
+        "summary": {
+            "total_employees": len(employees),
+            "working": working_count,
+            "on_break": on_break_count,
+            "clocked_out": clocked_out_count,
+            "late": late_count,
+            "pending_leave_requests": len(pending_leave_requests),
+        },
+        "employees": employee_rows,
+        "pending_leave_requests": pending_leave_requests[:12],
+    }
+
 # ===== Payroll Routes =====
 @api_router.post("/payroll", response_model=PayrollResponse)
 async def create_payroll(pr: PayrollCreate, current_user: dict = Depends(require_admin)):
@@ -2619,6 +2975,9 @@ async def get_payroll(
     status: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
 ):
+    if current_user["role"] == "manager":
+        raise HTTPException(status_code=403, detail="Managers do not have payroll access")
+
     query = {}
     
     if current_user["role"] == "employee":
@@ -2665,6 +3024,9 @@ async def get_payroll(
 
 @api_router.get("/payroll/{pr_id}", response_model=PayrollResponse)
 async def get_payroll_by_id(pr_id: str, current_user: dict = Depends(get_current_user)):
+    if current_user["role"] == "manager":
+        raise HTTPException(status_code=403, detail="Managers do not have payroll access")
+
     pr = await db.payroll.find_one({"id": pr_id})
     if not pr:
         raise HTTPException(status_code=404, detail="Payroll not found")
