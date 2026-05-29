@@ -1,4 +1,5 @@
 import React from 'react'
+import { Link } from 'react-router-dom'
 import {
   ArrowUpRight,
   BookOpen,
@@ -112,56 +113,97 @@ function RecommendationCard({ item }) {
 
 export default function Recommendations() {
   return (
-    <div className="min-h-full bg-slate-50">
-      <section className="relative overflow-hidden rounded-[2rem] border border-slate-200/70 bg-gradient-to-b from-white to-slate-50 px-6 py-12 shadow-sm sm:px-8 lg:px-10 lg:py-16">
-        <div className="max-w-4xl">
-          <span className="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-blue-700">
-            Editorial picks
-          </span>
-          <h1 className="mt-5 text-4xl font-bold leading-[1.05] tracking-tight text-slate-900 sm:text-5xl">
-            What We Recommend
-          </h1>
-          <p className="mt-6 max-w-2xl text-lg leading-relaxed text-slate-600 sm:text-xl">
-            Here are a few products, tools, and resources we genuinely recommend.
-            We&apos;ve curated this collection based on usefulness, quality, and
-            everyday value.
-          </p>
-        </div>
-      </section>
-
-      <section className="py-10 sm:py-12 lg:py-14">
-        <div className="mb-10 flex items-end justify-between gap-6">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-              The Collection
-            </p>
-            <h2 className="mt-2 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
-              Six things worth your attention
-            </h2>
+    <div className="min-h-screen bg-slate-50">
+      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur-sm">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
+          <Link to="/" className="flex items-center gap-3">
+            <img src="/emplora-wordmark.svg" alt="Emplora" className="h-8 w-auto" />
+          </Link>
+          <div className="flex items-center gap-3">
+            <Link
+              to="/login"
+              className="px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:text-slate-900"
+            >
+              Sign In
+            </Link>
+            <Link
+              to="/signup"
+              className="rounded-lg bg-primary-500 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-primary-600"
+            >
+              Create HR Account
+            </Link>
           </div>
         </div>
+      </header>
 
-        <div className="grid grid-cols-1 gap-7 sm:grid-cols-2 xl:grid-cols-3">
-          {RECOMMENDATIONS.map((item) => (
-            <RecommendationCard key={item.slug} item={item} />
-          ))}
-        </div>
-      </section>
+      <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8 lg:py-14">
+        <section className="relative overflow-hidden rounded-[2rem] border border-slate-200/70 bg-gradient-to-b from-white to-slate-50 px-6 py-12 shadow-sm sm:px-8 lg:px-10 lg:py-16">
+          <div className="max-w-4xl">
+            <span className="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-blue-700">
+              Editorial picks
+            </span>
+            <h1 className="mt-5 text-4xl font-bold leading-[1.05] tracking-tight text-slate-900 sm:text-5xl">
+              What We Recommend
+            </h1>
+            <p className="mt-6 max-w-2xl text-lg leading-relaxed text-slate-600 sm:text-xl">
+              Here are a few products, tools, and resources we genuinely recommend.
+              We&apos;ve curated this collection based on usefulness, quality, and
+              everyday value.
+            </p>
+          </div>
+        </section>
 
-      <section className="rounded-[2rem] border border-slate-200 bg-white">
-        <div className="max-w-3xl px-6 py-10 sm:px-8 sm:py-12">
-          <h2 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
-            Disclosure
-          </h2>
-          <p className="mt-5 text-lg font-semibold leading-relaxed text-slate-900">
-            As an Amazon Associate I earn from qualifying purchases.
-          </p>
-          <p className="mt-4 text-[16px] leading-relaxed text-slate-600">
-            This helps support Emplora at no additional cost to you. We only
-            recommend products we genuinely believe are useful and worth sharing.
-          </p>
+        <section className="py-10 sm:py-12 lg:py-14">
+          <div className="mb-10 flex items-end justify-between gap-6">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                The Collection
+              </p>
+              <h2 className="mt-2 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
+                Six things worth your attention
+              </h2>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-7 sm:grid-cols-2 xl:grid-cols-3">
+            {RECOMMENDATIONS.map((item) => (
+              <RecommendationCard key={item.slug} item={item} />
+            ))}
+          </div>
+        </section>
+
+        <section className="rounded-[2rem] border border-slate-200 bg-white">
+          <div className="max-w-3xl px-6 py-10 sm:px-8 sm:py-12">
+            <h2 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
+              Disclosure
+            </h2>
+            <p className="mt-5 text-lg font-semibold leading-relaxed text-slate-900">
+              As an Amazon Associate I earn from qualifying purchases.
+            </p>
+            <p className="mt-4 text-[16px] leading-relaxed text-slate-600">
+              This helps support Emplora at no additional cost to you. We only
+              recommend products we genuinely believe are useful and worth sharing.
+            </p>
+          </div>
+        </section>
+      </main>
+
+      <footer className="border-t border-slate-200 bg-white">
+        <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 px-4 py-8 text-center sm:px-6 md:flex-row md:text-left lg:px-8">
+          <p className="text-sm text-slate-500">© 2026 Emplora. All rights reserved.</p>
+          <div className="flex items-center gap-5 text-sm">
+            <Link to="/" className="text-slate-600 transition-colors hover:text-slate-900">
+              Home
+            </Link>
+            <Link to="/login" className="text-slate-600 transition-colors hover:text-slate-900">
+              Sign In
+            </Link>
+            <Link to="/signup" className="text-slate-600 transition-colors hover:text-slate-900">
+              Create HR Account
+            </Link>
+          </div>
         </div>
-      </section>
+      </footer>
     </div>
   )
 }

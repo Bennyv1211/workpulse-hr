@@ -100,6 +100,7 @@ function App() {
             </PublicOnlyRoute>
           }
         />
+        <Route path="/recommendations" element={<Recommendations />} />
         <Route
           path="/dashboard"
           element={
@@ -159,7 +160,6 @@ function App() {
               </ProtectedRoute>
             }
           />
-          <Route path="recommendations" element={<Recommendations />} />
           <Route path="settings" element={<Settings />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

@@ -19,7 +19,6 @@ import {
   Bell,
   FileText,
   CreditCard,
-  ShoppingBag,
 } from 'lucide-react'
 
 export default function Layout() {
@@ -43,7 +42,6 @@ export default function Layout() {
         { name: 'Paystubs', href: '/dashboard/paystubs', icon: FileText },
         { name: 'Billing', href: '/dashboard/billing', icon: CreditCard },
         { name: 'Reports', href: '/dashboard/reports', icon: BarChart3 },
-        { name: 'Recommendations', href: '/dashboard/recommendations', icon: ShoppingBag },
         { name: 'Settings', href: '/dashboard/settings', icon: Settings },
       ]
     : [
@@ -51,7 +49,6 @@ export default function Layout() {
         { name: 'Schedules', href: '/dashboard/schedules', icon: CalendarDays },
         { name: 'Leave Requests', href: '/dashboard/leave', icon: Calendar },
         { name: 'Attendance', href: '/dashboard/attendance', icon: Clock },
-        { name: 'Recommendations', href: '/dashboard/recommendations', icon: ShoppingBag },
         { name: 'Settings', href: '/dashboard/settings', icon: Settings },
       ]
 
