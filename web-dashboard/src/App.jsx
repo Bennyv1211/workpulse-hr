@@ -16,6 +16,7 @@ import Paystubs from './pages/Paystubs'
 import Reports from './pages/Reports'
 import Settings from './pages/Settings'
 import Billing from './pages/Billing'
+import Recommendations from './pages/Recommendations'
 import { canAccessWebDashboard, getWebStartPath, hasActiveSubscription, isHrRole } from './lib/roles'
 
 function FullPageSpinner() {
@@ -158,6 +159,7 @@ function App() {
               </ProtectedRoute>
             }
           />
+          <Route path="recommendations" element={<Recommendations />} />
           <Route path="settings" element={<Settings />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
