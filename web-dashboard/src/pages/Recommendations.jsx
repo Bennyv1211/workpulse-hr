@@ -30,7 +30,7 @@ const RECOMMENDATIONS = [
   },
   {
     slug: 'celsius-energy-drink',
-    title: 'CELSIUS Sparkling Green Apple Cherry',
+    title: 'CELSIUS Sparkling Green Apple Cherry, Sugar Free Energy Drink',
     category: 'Wellness / Energy',
     Icon: Zap,
     url: 'https://www.amazon.com/CELSIUS-Sparkling-Cherry-Functional-Essential/dp/B0BNW78Y32?crid=2D99MGXBEX0RX&dib=eyJ2IjoiMSJ9.W4jt0qJ38LhHauzQr-4U1DD_W3JXTEGLZSanxbb9ma-rEHTbCwIAIdTEhxAngxqbBK-IWj1AzbVEydMaGsiqLgduEmEagf2zukcNF1TWRc6xqS8tbZ9BDYkhbgY1n-zbvs1xtsTIcI_1pvUlZPWIX9SI73T6BhuKYdAIHReT9cxfqWDa_35MfXgY-_w18_kfsWaBXBJzYGy4gZPvlIpqf7_KVF-WvbI-6bICrbbRmLE8XfKC7fjmPI_-tQAqDJBwYGiBKPGEhovC1Pes6OK-KI8MU-JAW1spX9ClIi1fzis.HtJz_61j6dBiRJyJzPAxH7P8-hGxoos7WNAzyIY5Kcs&dib_tag=se&keywords=cherry%2Bcelsius&qid=1780094249&rdc=1&sprefix=cherry%2Bcelcius%2Caps%2C227&sr=8-1&th=1&linkCode=ll2&tag=1211121105-20&linkId=889cb89ee2136e0408a6464086f5d720&language=en_US&ref_=as_li_ss_tl',
@@ -57,7 +57,7 @@ const RECOMMENDATIONS = [
   },
   {
     slug: 'celsius-blue-razz-lemonade',
-    title: 'CELSIUS Fizz Free Blue Razz Lemonade',
+    title: 'CELSIUS Fizz Free Blue Razz Lemonade, Sugar Free Energy Drink',
     category: 'Wellness / Energy',
     Icon: CupSoda,
     url: 'https://www.amazon.com/CELSIUS-Sparkling-Cherry-Functional-Essential/dp/B0CRJ2HLMQ?crid=2D99MGXBEX0RX&dib=eyJ2IjoiMSJ9.W4jt0qJ38LhHauzQr-4U1DD_W3JXTEGLZSanxbb9ma-rEHTbCwIAIdTEhxAngxqbBK-IWj1AzbVEydMaGsiqLgduEmEagf2zukcNF1TWRc6xqS8tbZ9BDYkhbgY1n-zbvs1xtsTIcI_1pvUlZPWIX9SI73T6BhuKYdAIHReT9cxfqWDa_35MfXgY-_w18_kfsWaBXBJzYGy4gZPvlIpqf7_KVF-WvbI-6bICrbbRmLE8XfKC7fjmPI_-tQAqDJBwYGiBKPGEhovC1Pes6OK-KI8MU-JAW1spX9ClIi1fzis.HtJz_61j6dBiRJyJzPAxH7P8-hGxoos7WNAzyIY5Kcs&dib_tag=se&keywords=cherry%2Bcelsius&qid=1780094249&rdc=1&sprefix=cherry%2Bcelcius%2Caps%2C227&sr=8-1&th=1&linkCode=ll2&tag=1211121105-20&linkId=30320e8c7d456a02d7293e0026c0b73a&language=en_US&ref_=as_li_ss_tl',
