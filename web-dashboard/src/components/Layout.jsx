@@ -8,6 +8,7 @@ import {
   Clock,
   DollarSign,
   BarChart3,
+  Sparkles,
   Settings,
   LogOut,
   Menu,
@@ -22,6 +23,7 @@ const navigation = [
   { name: 'Attendance', href: '/dashboard/attendance', icon: Clock },
   { name: 'Payroll', href: '/dashboard/payroll', icon: DollarSign },
   { name: 'Reports', href: '/dashboard/reports', icon: BarChart3 },
+  { name: 'Recommendations', href: '/dashboard/recommendations', icon: Sparkles },
   { name: 'Settings', href: '/dashboard/settings', icon: Settings },
 ]
 

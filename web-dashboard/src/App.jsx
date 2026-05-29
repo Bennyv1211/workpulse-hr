@@ -12,6 +12,7 @@ import Attendance from './pages/Attendance'
 import Payroll from './pages/Payroll'
 import Reports from './pages/Reports'
 import Settings from './pages/Settings'
+import Recommendations from './pages/Recommendations'
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
@@ -48,6 +49,7 @@ function App() {
           <Route path="attendance" element={<Attendance />} />
           <Route path="payroll" element={<Payroll />} />
           <Route path="reports" element={<Reports />} />
+          <Route path="recommendations" element={<Recommendations />} />
           <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>
